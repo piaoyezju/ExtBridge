@@ -1,5 +1,6 @@
 import java.security.KeyStore
 import java.security.MessageDigest
+import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -26,9 +27,6 @@ android {
         targetSdk = 35
         versionCode = 25
         versionName = "3.5.3"
-        ndk {
-            abiFilters += "arm64-v8a"
-        }
     }
 
     sourceSets {
@@ -40,8 +38,6 @@ android {
             kotlin.directories.add("src")
             res.directories.clear()
             res.directories.add("res")
-            jniLibs.directories.clear()
-            jniLibs.directories.add("jniLibs")
             assets.directories.clear()
             assets.directories.add("assets")
         }
@@ -52,16 +48,46 @@ android {
     }
 
     val expectedReleaseCertSha256 = "e4f67b3012a16633006c64bfc9d5a95c7bdda10826bd729777c2a3066f49117c"
+    // Local overrides live in the git-ignored local.properties:
+    //   keystore.file=/abs/path/to/local.keystore   keystore.type=JKS|PKCS12
+    //   keystore.alias=testalias                    keystore.pass=******
+    val localProps = Properties().apply {
+        val f = rootProject.file("local.properties")
+        if (f.exists()) {
+            try {
+                f.inputStream().use { load(it) }
+            } catch (t: Throwable) {
+                logger.warn("Failed to read local.properties: ${t.message}")
+            }
+        }
+    }
+    fun localProp(key: String): String? = localProps.getProperty(key)?.trim()?.takeIf { it.isNotEmpty() }
+
     val p12File = rootProject.file("exthelper.p12")
+    val hzgndzKs = rootProject.file("hzgndz.keystore")
+    val localKs = localProp("keystore.file")?.let { file(it) }
+    if (localKs != null && !localKs.exists()) {
+        throw GradleException("keystore.file in local.properties points to non-existent file: ${localKs.absolutePath}")
+    }
     val envKs = System.getenv("EXTBRIDGE_KEYSTORE")?.takeIf { it.isNotBlank() }?.let { file(it) }
     if (envKs != null && !envKs.exists()) {
         throw GradleException("EXTBRIDGE_KEYSTORE points to non-existent file: ${envKs.absolutePath}")
     }
     val activeKs = when {
         envKs != null -> envKs
+        localKs != null -> localKs
         p12File.exists() -> p12File
+        hzgndzKs.exists() -> hzgndzKs
         else -> null
     }
+    val keystoreType = localProp("keystore.type")
+        ?: if (activeKs != null && activeKs.name.endsWith(".p12", ignoreCase = true)) "PKCS12" else "JKS"
+    val aliasCandidates = listOfNotNull(
+        System.getenv("EXTBRIDGE_KEY_ALIAS")?.takeIf { it.isNotBlank() },
+        localProp("keystore.alias"),
+        "extbridge",
+        "testalias",
+    ).distinct()
     val envPass = (
         System.getenv("EXTBRIDGE_KEYSTORE_PASS")?.takeIf { it.isNotBlank() }
             ?: System.getenv("EXTBRIDGE")?.takeIf { it.isNotBlank() }
@@ -69,7 +95,7 @@ android {
     if (envKs != null && envPass == null) {
         throw GradleException("EXTBRIDGE_KEYSTORE_PASS (or EXTBRIDGE) must be explicitly set when EXTBRIDGE_KEYSTORE is provided.")
     }
-    val activePass = envPass ?: "extbridge"
+    val activePass = envPass ?: localProp("keystore.pass") ?: "extbridge"
     val requireReleaseKey = (System.getenv("EXTBRIDGE_REQUIRE_RELEASE_KEY") == "1")
         || (project.findProperty("requireReleaseKey")?.toString()?.equals("true", ignoreCase = true) == true)
         || (System.getenv("GITHUB_REF")?.startsWith("refs/tags/v") == true)
@@ -77,29 +103,38 @@ android {
         (System.getenv("EXTBRIDGE_ALLOW_UNSIGNED_RELEASE") == "1")
             || (project.findProperty("allowUnsignedRelease")?.toString()?.equals("true", ignoreCase = true) == true)
         )
+    // A developer-provided local keystore (local.properties / hzgndz.keystore) has its own
+    // certificate, so the official-fingerprint gate only applies to the official key material.
+    val isCustomLocalKeystore = activeKs != null && activeKs != envKs && activeKs != p12File
     val allowCustomCert = project.findProperty("allowCustomReleaseCert")?.toString()?.equals("true", ignoreCase = true) == true
+        || isCustomLocalKeystore
     val isReleaseTaskRequested = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
 
     if ((requireReleaseKey || (isReleaseTaskRequested && !allowUnsignedRelease)) && activeKs == null) {
         throw GradleException(
-            "Release build requires EXTBRIDGE_KEYSTORE (or local exthelper.p12) matching SHA-256 $expectedReleaseCertSha256. " +
+            "Release build requires a keystore (EXTBRIDGE_KEYSTORE, local.properties keystore.file, exthelper.p12 or hzgndz.keystore). " +
                 "Never falls back to debug signing. For keyless reproducible-build verification only, pass -PallowUnsignedRelease=true (or EXTBRIDGE_ALLOW_UNSIGNED_RELEASE=1)."
         )
     }
 
     var signingPass = activePass
+    var signingAlias = aliasCandidates.first()
     if (activeKs != null) {
-        val candidatePasswords = listOfNotNull(envPass, "extbridge").distinct()
+        val candidatePasswords = listOfNotNull(envPass, localProp("keystore.pass"), "extbridge").distinct()
         var loadedKs: KeyStore? = null
         var unlockedPass: String? = null
+        var unlockedAlias: String? = null
         var lastErr: Throwable? = null
         for (cand in candidatePasswords) {
             try {
-                val candKs = KeyStore.getInstance("PKCS12")
+                val candKs = KeyStore.getInstance(keystoreType)
                 activeKs.inputStream().use { stream -> candKs.load(stream, cand.toCharArray()) }
-                if (candKs.getKey("extbridge", cand.toCharArray()) != null) {
+                val alias = aliasCandidates.firstOrNull { candKs.isKeyEntry(it) }
+                    ?: candKs.aliases().toList().firstOrNull { candKs.isKeyEntry(it) }
+                if (alias != null) {
                     loadedKs = candKs
                     unlockedPass = cand
+                    unlockedAlias = alias
                     break
                 }
             } catch (t: Throwable) {
@@ -107,12 +142,14 @@ android {
             }
         }
         val ks = loadedKs ?: throw GradleException(
-            "Failed to unlock release keystore (${activeKs.name}) with configured keystore password secret.",
+            "Failed to unlock keystore (${activeKs.name}, type=$keystoreType). " +
+                "Provide the password via EXTBRIDGE_KEYSTORE_PASS or `keystore.pass` in local.properties.",
             lastErr
         )
         signingPass = unlockedPass ?: activePass
-        val cert = ks.getCertificate("extbridge")
-            ?: throw GradleException("Alias 'extbridge' not found in release keystore: ${activeKs.absolutePath}")
+        signingAlias = unlockedAlias ?: signingAlias
+        val cert = ks.getCertificate(signingAlias)
+            ?: throw GradleException("Alias '$signingAlias' not found in keystore: ${activeKs.absolutePath}")
         val actualSha256 = MessageDigest.getInstance("SHA-256")
             .digest(cert.encoded)
             .joinToString("") { b -> "%02x".format(b) }
@@ -127,9 +164,9 @@ android {
         if (activeKs != null) {
             create("extrelease") {
                 storeFile = activeKs
-                storeType = "PKCS12"
+                storeType = keystoreType
                 storePassword = signingPass
-                keyAlias = "extbridge"
+                keyAlias = signingAlias
                 keyPassword = signingPass
                 enableV1Signing = false
                 enableV2Signing = true
@@ -167,9 +204,6 @@ android {
     }
 
     packaging {
-        jniLibs {
-            useLegacyPackaging = true
-        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
@@ -189,6 +223,10 @@ dependencies {
     implementation("top.yukonga.miuix.kmp:miuix-preference:0.9.4")
     implementation("top.yukonga.miuix.kmp:miuix-icons:0.9.4")
     implementation("top.yukonga.miuix.kmp:miuix-squircle:0.9.4")
+    // Shizuku privileged execution (replaces the Wireless-Debugging pairing flow)
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:aidl:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
 }
 
 tasks.named("preBuild") {

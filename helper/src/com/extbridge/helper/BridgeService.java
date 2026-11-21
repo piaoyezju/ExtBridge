@@ -604,7 +604,6 @@ public class BridgeService extends Service {
         sUserStopping = true;
         SideMouseCaptureActivity.finishActiveIfAny();
         final Context appCtx = (ctx != null) ? ctx.getApplicationContext() : sInstance;
-        AdbBootstrap.killLocalAdbServerAsync(appCtx);
         final BridgeService svc = sInstance;
         if (svc != null && svc.mHandler != null) {
             svc.mHandler.removeCallbacksAndMessages(null);
@@ -790,9 +789,43 @@ public class BridgeService extends Service {
         }
     }
 
+    /**
+     * Active built-in panel: display 0 when unfolded, the foldable cover panel (e.g. 1) when folded.
+     * Built-in panels always have the lowest ids; HDMI/Cast/VirtualDisplays come later, so no hidden
+     * Display#getType() reflection is needed here (it fails in the app process).
+     */
+    public static int getActiveBuiltinDisplayId(Context ctx) {
+        try {
+            DisplayManager dm = (DisplayManager) ctx.getSystemService(Context.DISPLAY_SERVICE);
+            if (dm == null) return Display.DEFAULT_DISPLAY;
+            Display d0 = dm.getDisplay(Display.DEFAULT_DISPLAY);
+            if (isPanelAwake(d0)) return Display.DEFAULT_DISPLAY;
+            int best = -1;
+            for (Display d : dm.getDisplays()) {
+                if (d == null) continue;
+                int id = d.getDisplayId();
+                if (id < 1 || id > 5) continue;
+                if (!isPanelAwake(d)) continue;
+                if (best < 0 || id < best) best = id;
+            }
+            if (best > 0) return best;
+        } catch (Throwable ignored) {}
+        return Display.DEFAULT_DISPLAY;
+    }
+
+    private static boolean isPanelAwake(Display d) {
+        if (d == null) return false;
+        try {
+            int st = d.getState();
+            return st == Display.STATE_ON || st == Display.STATE_ON_SUSPEND;
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
     private Notification buildNotification(BridgeClient.Status st) {
         ActivityOptions opts0 = ActivityOptions.makeBasic();
-        opts0.setLaunchDisplayId(0);
+        opts0.setLaunchDisplayId(getActiveBuiltinDisplayId(this));
         Bundle optBundle0 = opts0.toBundle();
 
         Intent mainIntent = new Intent(this, MainActivity.class)
@@ -4124,7 +4157,7 @@ public class BridgeService extends Service {
             Intent mi = new Intent(BridgeService.this, MainActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             ActivityOptions o0 = ActivityOptions.makeBasic();
-            o0.setLaunchDisplayId(0);
+            o0.setLaunchDisplayId(getActiveBuiltinDisplayId(this));
             startActivity(mi, o0.toBundle());
         } catch (Throwable ignored) {}
     }
@@ -4135,7 +4168,7 @@ public class BridgeService extends Service {
             Intent ti = new Intent(BridgeService.this, TouchpadActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             ActivityOptions o0 = ActivityOptions.makeBasic();
-            o0.setLaunchDisplayId(0);
+            o0.setLaunchDisplayId(getActiveBuiltinDisplayId(this));
             startActivity(ti, o0.toBundle());
         } catch (Throwable ignored) {}
     }

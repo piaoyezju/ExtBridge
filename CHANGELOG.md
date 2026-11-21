@@ -4,6 +4,36 @@
 
 ---
 
+## Unreleased — 激活方式改为 Shizuku（替代无线调试配对）
+
+### ✨ Shizuku 一键激活
+- 新增 Shizuku 依赖与清单声明：`dev.rikka.shizuku:api / aidl / provider:13.1.5`，并在 `AndroidManifest.xml` 中声明受 `INTERACT_ACROSS_USERS_FULL` 保护的 `rikka.shizuku.ShizukuProvider`，`<queries>` 增加 Shizuku 包可见性。
+- 新增 `ShizukuBootstrap.java`：Shizuku 服务/授权状态探测、授权请求（`OnRequestPermissionResultListener` 回调）、`IShizukuService#newProcess` 特权 Shell 执行（分别捕获 stdout / stderr 与退出码，带超时守护）、打开 Shizuku 应用或下载页。
+- `AdbBootstrap` 新增 `shizukuBootstrapAsync()`：复用原有「SHA-256 校验 → `mktemp (O_EXCL)` 原子替换 → `appops`/`pm grant`/`deviceidle` 授权 → `u:r:shell:s0` 降权启动」脚本，直接以 Shizuku 的 shell(uid 2000)/root 身份拉起守护进程，**不再需要开启无线调试、不再需要 6 位配对码与 `adb connect`**。
+- 激活抽屉首页改为 **「Shizuku 激活」**：实时状态提示、`授权 Shizuku`、`Shizuku 一键激活服务`、`打开 Shizuku`、`启动时自动 Shizuku 激活`（默认开启）；移除 mDNS 配对端口、6 位配对码、连接端口输入与通知栏填码入口，`Root 激活` 与 `电脑 ADB` 两种方式完整保留。
+- 启动/回到前台时自动刷新 Shizuku 状态；打开应用若已授权 Shizuku 则优先静默激活（失败回退到激活抽屉），Root 自动激活逻辑保留为次级兜底。
+- 旧版内置 `libadb.so` 无线调试配对实现（`AdbBootstrap` 配对/mDNS、`AdbPairingReceiver` 通知栏填码）**已彻底删除**：移除 `helper/jniLibs/arm64-v8a/libadb.so`、`AdbPairingReceiver`、`AdbBootstrap` 内的 mDNS 发现/`adb pair`/`adb connect`/私有 adb socket/配对通知全部代码，剔除 `CHANGE_WIFI_MULTICAST_STATE` 权限与 `ndk.abiFilters` / `jniLibs` 打包配置，APK 体积由 5.56 MB 降至 3.36 MB。
+- **签名**：本地开发改为读取根目录 `hzgndz.keystore`（JKS，别名 `testalias`）并支持 `local.properties` 的 `keystore.file/keystore.alias/keystore.type/keystore.pass` 覆盖（`local.properties` 与 `*.keystore` 均已被 `.gitignore` 忽略，口令不进版本库）；本地自定义证书不再强制匹配官方指纹，CI Tag 发布仍强制官方密钥。
+
+### 🧩 折叠屏（Galaxy Z Flip5）适配
+- **外屏是独立逻辑显示**：三星折叠机的覆盖屏/副屏是 `displayId=1`（748×720、`FLAG_PRESENTATION`、`INSTALL_ORIENTATION_90`），不是 display 0 的另一种模式。新增 `pickActiveBuiltinDisplayId()`：内屏亮用 0，折叠时自动切到亮着的那块内置屏。
+- **镜像源不再硬编码 display 0**：`mirrorDisplay`、镜像几何（`readDisplayRealSize(displayId)`）、外接鼠标光标 `getInputManager().getCursorPosition(displayId)`、`moveDisplayToTop` 全部跟随 `sMirrorSrcId`；折叠/展开时通过 `DisplayListener` + tick 检测到活动内置屏变化会自动重建 mirror 层（新增 `EXTBRIDGE_MIRROR_SRC id=` / `_SWITCH` / `_REBUILD` 日志）。
+- **App 侧不再硬编码 `setLaunchDisplayId(0)`**：`MainActivity` / `TouchpadActivity` / `BridgeService`（通知点击、主控台、触摸板）改为「当前亮着的内置屏」，且不再在内屏/外屏之间来回搬自己（之前会导致在外屏点开 App 一闪就退）。
+- **移除隐藏 API 依赖**：`Display#getType()` 在 App 进程反射会被拦截，改为按显示 ID 判定内置屏（0~5 为内置，扩展屏/虚拟屏 ID 更靠后）；daemon 侧同样以 ID 规则兜底并排除 `TYPE_EXTERNAL`。
+- **OEM 忽略 `setLaunchDisplayId` 的补救**：三星在 shell 发起的启动里会静默把任务丢到当前活动屏。新增 `enforceLaunchedTaskOnVd()`（启动后 80/160/320/640/1200/2000ms 连续校验并用 `moveRootTaskToDisplay` 拉回虚拟屏）、DeX 稳态每 1.5s 兜底检查、释放虚拟屏前先清理残留 ExtBridge 桌面任务（否则会被系统迁移到手机屏抢焦点）。
+- **已知限制（系统行为，非本应用）**：三星在 HDMI 热插拔瞬间会把 `device_state` 从 `CLOSED` override 成 `OPENED`（`mBaseState=CLOSED` / `mOverrideState=OPENED`，requester 为 system_server），于是活动屏切到内屏、外屏熄灭；本应用停止运行时同样复现。规避方式：插线后展开再折叠一次即可恢复外屏。
+
+### ✅ 验证
+- 真机（Galaxy Z Flip5 / Android 16 + Shizuku 13.1.5 shell 模式）实测：`授权 Shizuku` → `Shizuku 一键激活服务` → 守护进程 `app_process` 成功以 `u:r:shell:s0` 拉起，主控台顶部显示 **「核心服务在线 · 待插入显示器」**。
+- 修复真机暴露的三个问题：
+  1. **守护进程信任锚**：`bridge/ExtBridge.java` 的 `EXPECTED_HELPER_CERT_SHA256` 单值校验在本地签名包上导致 Binder 握手全被拒（日志 `EXTBRIDGE_SECURITY_REJECT untrusted ... cert=cf854b8d...`）；改为 `TRUSTED_HELPER_CERT_SHA256[]` 白名单，同时保留官方发布证书与本地 `hzgndz.keystore` 证书。
+  2. **bootstrap 脚本自杀**：原 `pkill -f '^(/.*/)?app_process.*ExtBridge'` 的正则 `(/.*)?` 会把自己所在的 `sh -c "..."` 命令行（内含 `app_process ... ExtBridge` 文本）一起匹配，导致脚本在拉起前被 SIGTERM（日志 `execShell: code=143 outLen=0`，并残留大量 `extbridge.XXXXXX` 临时 jar）；改为锚定 `^(/system/bin/)?app_process .*com\.extbridge\.daemon\.ExtBridge`，并在脚本开头清扫历史临时 jar。
+  3. **诊断能力**：Shizuku 路径的 bootstrap 脚本开启 `set -x` 并重定向到 `/data/local/tmp/extbridge_boot.trace`，失败时自动附带 `id / getenforce / extbridge.log` 探测结果到弹窗与 logcat。
+- 构建脚本：`build_v3.ps1` 改为优先选用 JDK 21+（Android Studio JBR）、`local.properties` 以无 BOM 方式写入、保留 `keystore.*` 覆盖项，并在本地自定义密钥场景下跳过官方指纹校验。
+- `:helper:assembleDebug` 与 `:helper:assembleRelease`（R8 + Lint Vital）均编译通过；release 混淆后 `moe.shizuku.server.IShizukuService` 等 AIDL 描述符与 `rikka.shizuku.ShizukuProvider` 均保留；产物已用 `hzgndz.keystore` V3 签名（`CN=sunfeng / O=hzgndz`，SHA-256 `cf854b8d...5bc3`）。
+
+---
+
 ## v3.5.3 (`versionCode: 25`) — 2026-11-18
 
 ### ✨ 全新界面重构：Xiaomi HyperOS 原生风格（`Jetpack Compose + Miuix 0.9.4`）、舞台过渡动画与周边联动

@@ -44,9 +44,9 @@
 - **横屏自动左右分屏 / 竖屏自动上下分屏**：Dock 一键分屏或桌面图标长按/右键放入左/右/上/下屏；中央高对比度拖拽分割条支持 **`25% ~ 75%`** 实时调节比例与快捷预设（`3:7 / 4:6 / 5:5 / 6:4 / 7:3`、`⇄/⇅ 互换`、`✕ 退出`）。
 - **三档分应用兼容策略 + 防悬浮小窗劫持**：支持 *跟随系统默认 / 强制横屏全屏 / 竖屏居中兼容*（配置持久化于 `/data/local/tmp/extbridge_apps.conf`），同时针对开启了小米「工作台模式（无界桌面）」或系统「强制桌面模式」的设备自动锁定扩展屏 `WINDOWING_MODE_FULLSCREEN` 容器，防止桌面与应用被系统误塞进鼠标无法拖拽的 `•••` 悬浮小窗。
 
-### 4. 📱 虚拟触摸板与键盘输入转发 + 单 APK 三模自激活
+### 4. 📱 虚拟触摸板与键盘输入转发 + 单 APK 多模自激活
 - **增强虚拟触摸板 (`TouchpadActivity`)**：支持单指移动、轻触左键、双指右键、双指/右边缘滚动、拖拽锁定开关、`0.6x ~ 2.4x` 指针灵敏度调节、一键直达「副屏直控」，以及呼出主屏软键盘将输入文字/回车/退格转发给外接屏焦点应用。
-- **单 APK 三模自激活**：APK 内置 `arm64-v8a` 原生 `adb` (`libadb.so`) 与 `extbridge.jar`，支持 **免 Root 本机无线调试通知栏填码激活**、**电脑 ADB 一键激活** 与 **已 Root 设备静默降权激活 (`uid=2000 shell`)**。
+- **单 APK 多模自激活**：APK 内置 `extbridge.jar`（**已移除**内置 `libadb.so`），支持 **Shizuku 一键激活（免无线调试、免 6 位配对码，最推荐）**、**电脑 ADB 一键激活** 与 **已 Root 设备静默降权激活 (`uid=2000 shell`)**。
 
 ---
 
@@ -75,8 +75,7 @@
 │                                            # Binder IPC (UID ACL 鉴权)、分屏/键鼠跨屏注入、亮度管理
 ├── helper/                                  # Android 客户端 App (com.extbridge.helper · Kotlin + Compose + Miuix)
 │   ├── build.gradle.kts                     # AGP 9 + Compose + Miuix 0.9.4 + R8 瘦身配置 (v3.5.3 / code 25)
-│   ├── AndroidManifest.xml                  # 清单声明与 ControlReceiver 契约
-│   ├── jniLibs/arm64-v8a/libadb.so          # 内置 arm64 adb 二进制，供免电脑无线调试自激活使用
+│   ├── AndroidManifest.xml                  # 清单声明、Shizuku Provider 与 ControlReceiver 契约
 │   ├── res/
 │   └── src/com/extbridge/helper/
 │       ├── MainActivity.kt                  # HyperOS 澎湃风格主控台（响应式双栏/底栏、Miuix 抽屉与分应用规则）
@@ -92,14 +91,14 @@
 │       ├── BridgeProvider.java              # 零延迟安全分发 Binder 句柄（UID 白名单鉴权）
 │       ├── ControlReceiver.java             # `goAsync()` 异步后台广播控制接收器（含发送方 UID 鉴权）
 │       ├── NavAssistService.java            # 无障碍辅助服务（高优先级黑屏遮罩、边缘叠加、手势穿透）
-│       ├── AdbBootstrap.java                # mDNS 自动发现、无线调试配对连接、守护进程拉起
-│       └── AdbPairingReceiver.java          # 通知栏 6 位配对码快捷响应
+│       ├── AdbBootstrap.java                # 守护进程拉起脚本、Root 激活与 Shizuku 特权执行入口
+│       ├── ShizukuBootstrap.java            # Shizuku 授权/状态探测与 IShizukuService#newProcess 特权 Shell
 ├── docs/
 │   ├── USER_GUIDE.md                        # 完整图文使用说明书
 │   ├── RELEASE_v3.5.3.md                    # v3.5.3 版本发布与更新说明
 │   └── images/                              # GitHub 文档实机截图素材
 ├── .github/workflows/build.yml              # GitHub Actions 云端自动编译打包与 Release 工作流（SHA 锁定与最小权限）
-├── THIRD_PARTY_NOTICES.md                   # 第三方开源组件与内置 libadb.so 来源、哈希及许可证声明
+├── THIRD_PARTY_NOTICES.md                   # 第三方开源组件（Compose / Miuix / Shizuku API）许可证声明
 ├── build_v3.ps1                             # Windows 一键全自动编译打包脚本（extbridge.jar + Gradle R8 Release）
 └── start_extbridge.sh                       # 手机/ADB 手动启动守护进程脚本
 ```
@@ -113,7 +112,7 @@
 ### 核心 3 步：
 1. 安装 `ExtBridge_v3.5.3.apk`，首次打开按提示授予 **通知**、**悬浮窗** 与 **无障碍服务 (`ExtBridge 平板辅助手势`)** 权限（小米等设备建议在开发者选项开启「USB 调试（安全设置）」以允许点击注入）。
 2. 在激活弹窗中任选其一启动守护进程：
-   - **免 Root 本机无线调试**：打开系统无线调试后在通知栏直接填 6 位配对码自激活；
+   - **Shizuku 一键激活（最推荐）**：安装并启动 [Shizuku](https://shizuku.rikka.app/download/)，在弹窗 **「Shizuku 激活」** 页点击 **「授权 Shizuku」** → **「Shizuku 一键激活服务」** 即可，**无需开启无线调试、无需输入 6 位配对码**；
    - **电脑 ADB 一键命令**（零宿主变量展开，兼容 Windows CMD / PowerShell 与 Linux / macOS Bash / Zsh）：
      ```bash
      adb shell "rm -f /data/local/tmp/extb_src.apk /data/local/tmp/extbridge.jar.new && pm path com.extbridge.helper | cut -d: -f2 | head -n1 | xargs cat > /data/local/tmp/extb_src.apk && test -s /data/local/tmp/extb_src.apk && unzip -p /data/local/tmp/extb_src.apk assets/extbridge.jar > /data/local/tmp/extbridge.jar.new && rm -f /data/local/tmp/extb_src.apk && test -s /data/local/tmp/extbridge.jar.new && unzip -tq /data/local/tmp/extbridge.jar.new >/dev/null 2>&1 && chmod 644 /data/local/tmp/extbridge.jar.new && timeout 6 env CLASSPATH=/data/local/tmp/extbridge.jar.new app_process /data/local/tmp com.extbridge.daemon.ExtBridge --verify-helper >/dev/null 2>&1 && (timeout 8 env CLASSPATH=/data/local/tmp/extbridge.jar.new app_process /data/local/tmp com.extbridge.daemon.ExtBridge --stop >/dev/null 2>&1 || true) && (pgrep -f '^app_process.*ExtBridge' >/dev/null 2>&1 && (pkill -f '^app_process.*ExtBridge' 2>/dev/null || true) && sleep 1 && (pkill -f -l KILL '^app_process.*ExtBridge' 2>/dev/null || true) || true) && rm -f /data/local/tmp/extbridge.jar && mv -f /data/local/tmp/extbridge.jar.new /data/local/tmp/extbridge.jar && test -s /data/local/tmp/extbridge.jar && appops set com.extbridge.helper SYSTEM_ALERT_WINDOW allow && appops set com.extbridge.helper RUN_ANY_IN_BACKGROUND allow && (appops set com.extbridge.helper 10021 allow 2>/dev/null || true) && (appops set com.extbridge.helper ACCESS_RESTRICTED_SETTINGS allow 2>/dev/null || true) && (pm grant com.extbridge.helper android.permission.POST_NOTIFICATIONS 2>/dev/null || true) && (dumpsys deviceidle whitelist +com.extbridge.helper >/dev/null 2>&1 || true) && (CLASSPATH=/data/local/tmp/extbridge.jar nohup app_process /data/local/tmp com.extbridge.daemon.ExtBridge >/data/local/tmp/extbridge.log 2>&1 </dev/null &)"
@@ -131,7 +130,14 @@ Windows 下具备 **JDK 17+**（Gradle Toolchain 将自动拉取 JDK 21）与 **
 powershell -ExecutionPolicy Bypass -File .\build_v3.ps1
 ```
 
-输出产物位于 `build\out\extbridge.jar` 与 `build\out\exthelper.apk`（Release 构建默认要求官方签名证书 `exthelper.p12` / `EXTBRIDGE_KEYSTORE`，绝不回退 Debug 签名；如需无密钥可复现构建校验，可设置 `$env:EXTBRIDGE_ALLOW_UNSIGNED_RELEASE="1"` 生成 `exthelper-unsigned.apk`）。完整版本更新历史请见 [CHANGELOG.md](CHANGELOG.md)。
+输出产物位于 `build\out\extbridge.jar` 与 `build\out\exthelper.apk`。
+
+**签名**：构建会按以下优先级自动选择密钥库（绝不回退 Debug 签名）：
+1. `EXTBRIDGE_KEYSTORE` / `EXTBRIDGE_KEYSTORE_PASS` 环境变量（CI 用）；
+2. `local.properties` 中的 `keystore.file` / `keystore.alias` / `keystore.type` / `keystore.pass`（本地开发，`local.properties` 已被 git 忽略）；
+3. 仓库根目录的 `exthelper.p12`（官方发布证书，会校验 SHA-256 指纹）或 `hzgndz.keystore`（本地自定义证书，JKS，别名自动探测）。
+
+如需无密钥可复现构建校验，可设置 `$env:EXTBRIDGE_ALLOW_UNSIGNED_RELEASE="1"` 生成 `exthelper-unsigned.apk`。完整版本更新历史请见 [CHANGELOG.md](CHANGELOG.md)。
 
 ---
 
@@ -143,4 +149,4 @@ powershell -ExecutionPolicy Bypass -File .\build_v3.ps1
 ---
 
 ## ⚠️ 开源协议与第三方声明
-基于 [MIT License](LICENSE) 开源；内置原生 `libadb.so` 及第三方开源库来源、哈希与许可证详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+基于 [MIT License](LICENSE) 开源；第三方开源库（Compose / Miuix / Shizuku API）来源与许可证详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

@@ -14,6 +14,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.drawable.Drawable
+import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -21,6 +22,7 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.util.DisplayMetrics
+import android.view.Display
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -220,11 +222,12 @@ class MainActivity : ComponentActivity() {
     private var waitingSettingsReturn = false
     private var userSkippedActivation = false
     private var autoRootTried = false
+    private var autoShizukuTried = false
 
     // Overlay Sheets & Dialogs visibility
     private var showDiagSheet by mutableStateOf(false)
     private var showActivationSheet by mutableStateOf(false)
-    private var activationInitTab by mutableIntStateOf(1)
+    private var activationInitTab by mutableIntStateOf(0)
     private var showPermDialog by mutableStateOf(false)
     private var permDialogIsDevGate by mutableStateOf(false)
     private var showDevGuideDialog by mutableStateOf(false)
@@ -238,16 +241,12 @@ class MainActivity : ComponentActivity() {
 
     // Activation sheet live state
     private var autoRootEnabled by mutableStateOf(false)
-    private var autoCloseWifiAdbEnabled by mutableStateOf(false)
+    private var autoShizukuEnabled by mutableStateOf(true)
     private var hasSuHint by mutableStateOf(false)
-    private var mdnsHint by mutableStateOf("")
-    private var pairHost by mutableStateOf("")
-    private var pairPort by mutableStateOf("")
-    private var pairCode by mutableStateOf("")
-    private var connPort by mutableStateOf("")
-    private var hostEdited = false
-    private var pairPortEdited = false
-    private var connPortEdited = false
+    private var shizukuStatus by mutableStateOf("")
+    private var shizukuStatusColor by mutableStateOf(HyperBlue)
+    private var shizukuGranted by mutableStateOf(false)
+    private var shizukuPermPendingActivate = false
     private var actWorking by mutableStateOf(false)
     private var actStatusText by mutableStateOf("")
     private var actStatusColor by mutableStateOf(HyperBlue)
@@ -282,6 +281,21 @@ class MainActivity : ComponentActivity() {
     private val autoPromptCheck = Runnable {
         if (isFinishing || startupPermInProgress || showPermDialog) return@Runnable
         if (BridgeClient.getService() != null) return@Runnable
+        // Shizuku first: it needs no pairing code and no developer-options round trip.
+        if (!autoShizukuTried && AdbBootstrap.isAutoShizukuEnabled(this) && ShizukuBootstrap.hasPermission()) {
+            autoShizukuTried = true
+            Toast.makeText(this, "正在通过 Shizuku 自动激活 ExtBridge 服务…", Toast.LENGTH_SHORT).show()
+            AdbBootstrap.shizukuBootstrapAsync(this, false, object : AdbBootstrap.ProgressListener {
+                override fun onStep(message: String?) {}
+                override fun onResult(success: Boolean, message: String?) {
+                    refreshAllState(syncFromDaemon = true)
+                    if (!success && !isFinishing && !userSkippedActivation && !showActivationSheet) {
+                        openActivationSheet()
+                    }
+                }
+            })
+            return@Runnable
+        }
         if (!autoRootTried && AdbBootstrap.isAutoRootEnabled(this)) {
             autoRootTried = true
             Toast.makeText(this, "正在尝试自动 Root 激活 ExtBridge 服务…", Toast.LENGTH_SHORT).show()
@@ -303,7 +317,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (ensureOnDisplay0()) return
+        if (ensureOnBuiltinDisplay()) return
         enableEdgeToEdge()
 
         themeModeIdx = ExtThemePrefs.getThemeModeIndex(this)
@@ -343,6 +357,7 @@ class MainActivity : ComponentActivity() {
         BridgeService.sUserStopping = false
         BridgeService.ensureStarted(this)
         syncLocalPrefsToState()
+        refreshShizukuState()
 
         if (waitingSettingsReturn) {
             waitingSettingsReturn = false
@@ -377,34 +392,63 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        AdbBootstrap.stopDiscoveryIfIdle()
         handler.removeCallbacksAndMessages(null)
         super.onDestroy()
     }
 
-    private fun ensureOnDisplay0(): Boolean {
+    /**
+     * Foldables expose the cover panel as an extra built-in display (Galaxy Z Flip: inner = 0,
+     * cover = 1). The console must stay on whatever built-in panel the user is looking at, so only
+     * bounce away from real external/virtual displays - and then land on the *active* built-in panel
+     * instead of blindly display 0 (which is the folded-off, invisible panel while the phone is shut).
+     */
+    private fun ensureOnBuiltinDisplay(): Boolean {
         return try {
-            val d = display
-            if (d != null && d.displayId != 0) {
-                val i = Intent(this, MainActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
-                val opts = ActivityOptions.makeBasic().setLaunchDisplayId(0)
-                startActivity(i, opts.toBundle())
-                finishAndRemoveTask()
-                true
-            } else {
-                false
-            }
+            val d = display ?: return false
+            if (isBuiltinPanel(d)) return false
+            val targetId = activeBuiltinDisplayId()
+            val i = Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+            val opts = ActivityOptions.makeBasic().setLaunchDisplayId(targetId)
+            startActivity(i, opts.toBundle())
+            finishAndRemoveTask()
+            true
         } catch (_: Throwable) {
             false
         }
     }
 
+    /**
+     * Built-in panels are always the lowest display ids (0 = inner main screen, 1 = foldable cover
+     * panel); external HDMI/Cast displays and VirtualDisplays are allocated much higher ids.
+     * Deliberately avoids Display#getType(): it is a hidden API and reflection fails in the app
+     * process, which previously made the cover screen look like an "external" display.
+     */
+    private fun isBuiltinPanel(d: Display): Boolean = d.displayId in 0..5
+
+    private fun isPanelAwake(d: Display): Boolean =
+        try {
+            d.state == Display.STATE_ON || d.state == Display.STATE_ON_SUSPEND
+        } catch (_: Throwable) {
+            true
+        }
+
+    /** The built-in panel the user is currently looking at: inner screen, or the cover panel when folded. */
+    private fun activeBuiltinDisplayId(): Int {
+        val dm = getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager ?: return 0
+        val d0 = dm.getDisplay(Display.DEFAULT_DISPLAY)
+        if (d0 != null && isPanelAwake(d0)) return Display.DEFAULT_DISPLAY
+        val awake = dm.displays?.filter { it != null && isPanelAwake(it) } ?: emptyList()
+        return awake.filter { it.displayId in 1..5 }
+            .minByOrNull { it.displayId }?.displayId ?: Display.DEFAULT_DISPLAY
+    }
+
     private fun syncLocalPrefsToState() {
         dockAutoHide = BridgeService.isDockAutoHideEnabled(this)
         autoRootEnabled = AdbBootstrap.isAutoRootEnabled(this)
-        autoCloseWifiAdbEnabled = AdbBootstrap.isAutoCloseWifiAdbEnabled(this)
+        autoShizukuEnabled = AdbBootstrap.isAutoShizukuEnabled(this)
         hasSuHint = AdbBootstrap.hasSuBinaryHint()
+        shizukuGranted = ShizukuBootstrap.hasPermission()
         mirrorThemeId = BridgeService.getMirrorThemeId(this)
         mirrorSpeedIdx = BridgeService.getMirrorCursorSpeedIdx(this)
         mirrorMemoPreview = BridgeService.getMirrorMemoText(this)
@@ -451,8 +495,6 @@ class MainActivity : ComponentActivity() {
                     userSkippedActivation = false
                     if (showActivationSheet) {
                         showActivationSheet = false
-                        AdbBootstrap.stopDiscovery()
-                        AdbBootstrap.cancelPairingNotification(this)
                         Toast.makeText(this, "ExtBridge 核心服务已连接", Toast.LENGTH_SHORT).show()
                     }
                     val syncAllowed = android.os.SystemClock.uptimeMillis() >= suppressDaemonSyncUntilMs
@@ -764,7 +806,7 @@ class MainActivity : ComponentActivity() {
                 "未激活",
                 HyperRed,
                 "守护进程尚未运行",
-                "支持 Root 一键拉起、本机无线调试自激活或电脑单行 ADB 命令启动。",
+                "支持 Shizuku / Root 一键拉起或电脑单行 ADB 命令启动。",
             )
             st.mirrorMode == 1 && st.extId > 0 -> QuadHero(
                 "镜像投屏",
@@ -1472,7 +1514,7 @@ class MainActivity : ComponentActivity() {
             Card {
                 ArrowPreference(
                     title = "激活 / 重连核心守护进程",
-                    summary = if (daemonStatus.connected) "当前在线 · 点击查看 Root / 无线调试 / ADB 引导" else "当前未连接 · 点击立即激活",
+                    summary = if (daemonStatus.connected) "当前在线 · 点击查看 Shizuku / Root / ADB 引导" else "当前未连接 · 点击立即激活",
                     onClick = {
                         userSkippedActivation = false
                         openActivationSheet()
@@ -1490,12 +1532,12 @@ class MainActivity : ComponentActivity() {
                 )
                 SectionLine()
                 SwitchPreference(
-                    title = "无线激活后自动关闭无线调试",
-                    summary = "守护进程就绪后自动关闭系统无线调试开关以收敛攻击面",
-                    checked = autoCloseWifiAdbEnabled,
+                    title = "启动时自动 Shizuku 激活",
+                    summary = "已授权 Shizuku 时，打开软件自动拉起守护进程（无需配对码）",
+                    checked = autoShizukuEnabled,
                     onCheckedChange = { next ->
-                        autoCloseWifiAdbEnabled = next
-                        AdbBootstrap.setAutoCloseWifiAdbEnabled(this@MainActivity, next)
+                        autoShizukuEnabled = next
+                        AdbBootstrap.setAutoShizukuEnabled(this@MainActivity, next)
                     },
                 )
                 SectionLine()
@@ -1568,38 +1610,23 @@ class MainActivity : ComponentActivity() {
                 autoRootEnabled = next
                 AdbBootstrap.setAutoRootEnabled(this, next)
             },
-            mdnsHint = mdnsHint,
-            pairHost = pairHost,
-            onPairHostChange = {
-                pairHost = it
-                hostEdited = true
+            shizukuStatus = shizukuStatus,
+            shizukuStatusColor = shizukuStatusColor,
+            shizukuGranted = shizukuGranted,
+            autoShizukuEnabled = autoShizukuEnabled,
+            onAutoShizukuChange = { next ->
+                autoShizukuEnabled = next
+                AdbBootstrap.setAutoShizukuEnabled(this, next)
             },
-            pairPort = pairPort,
-            onPairPortChange = {
-                pairPort = it
-                pairPortEdited = true
-            },
-            pairCode = pairCode,
-            onPairCodeChange = { pairCode = it },
-            connPort = connPort,
-            onConnPortChange = {
-                connPort = it
-                connPortEdited = true
-            },
+            onRequestShizukuPerm = { requestShizukuPermission(false) },
+            onOpenShizukuApp = { ShizukuBootstrap.openManager(this) },
+            onRunShizuku = { triggerShizukuActivation() },
             actStatusText = actStatusText,
             actStatusColor = actStatusColor,
             working = actWorking,
             pcAdbCommand = remember { AdbBootstrap.buildPcAdbCommand() },
-            onSelectWirelessTab = { startMdnsDiscovery() },
             onRunRoot = { triggerRootActivation() },
             onOpenDevOptions = { openDeveloperOptionsWithGate() },
-            onSendPairNotif = {
-                if (ensureNotifPermAndShowPairNotif()) {
-                    Toast.makeText(this, "已发送配对通知，可在系统弹窗上方下拉直接输入配对码", Toast.LENGTH_LONG).show()
-                }
-            },
-            onRunWirelessPair = { triggerWirelessPair() },
-            onRunWirelessConnect = { triggerWirelessConnect() },
             onCopyAdbCmd = {
                 val cmd = AdbBootstrap.buildPcAdbCommand()
                 val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
@@ -1609,7 +1636,6 @@ class MainActivity : ComponentActivity() {
             onSkip = {
                 userSkippedActivation = true
                 showActivationSheet = false
-                AdbBootstrap.stopDiscovery()
             },
         )
 
@@ -1756,7 +1782,7 @@ class MainActivity : ComponentActivity() {
 
     private fun launchOnDisplay0(cls: Class<*>) {
         runCatching {
-            val opts = ActivityOptions.makeBasic().setLaunchDisplayId(0)
+            val opts = ActivityOptions.makeBasic().setLaunchDisplayId(activeBuiltinDisplayId())
             startActivity(Intent(this, cls), opts.toBundle())
         }.onFailure {
             startActivity(Intent(this, cls))
@@ -1881,37 +1907,72 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openActivationSheet() {
-        hostEdited = false
-        pairPortEdited = false
-        connPortEdited = false
-        pairHost = AdbBootstrap.getLocalIpv4()
         hasSuHint = AdbBootstrap.hasSuBinaryHint()
         autoRootEnabled = AdbBootstrap.isAutoRootEnabled(this)
-        activationInitTab = if (hasSuHint || autoRootEnabled) 0 else 1
+        autoShizukuEnabled = AdbBootstrap.isAutoShizukuEnabled(this)
+        refreshShizukuState()
+        activationInitTab = when {
+            ShizukuBootstrap.isManagerInstalled(this) -> 0
+            hasSuHint || autoRootEnabled -> 1
+            else -> 0
+        }
         actStatusText = ""
         showActivationSheet = true
-        if (activationInitTab == 1) {
-            startMdnsDiscovery()
+    }
+
+    private fun refreshShizukuState() {
+        shizukuGranted = ShizukuBootstrap.hasPermission()
+        shizukuStatus = ShizukuBootstrap.statusText(this)
+        shizukuStatusColor = when {
+            shizukuGranted -> HyperGreen
+            ShizukuBootstrap.isRunning() -> HyperAmber
+            else -> HyperRed
         }
     }
 
-    private fun startMdnsDiscovery() {
-        AdbBootstrap.startDiscovery(this) { ds ->
-            if (ds == null) return@startDiscovery
-            val pStr = if (ds.pairingPort > 0) "${ds.pairingHost}:${ds.pairingPort}" else "待开启配对窗"
-            val cStr = if (ds.connectPort > 0) "${ds.connectHost}:${ds.connectPort}" else "待检测"
-            mdnsHint = "mDNS 自动发现 · 配对 [$pStr] · 连接 [$cStr]"
-            if (!hostEdited) {
-                val bestHost = ds.pairingHost.ifBlank { ds.connectHost }
-                if (bestHost.isNotBlank()) pairHost = bestHost
-            }
-            if (!pairPortEdited && ds.pairingPort > 0) {
-                pairPort = ds.pairingPort.toString()
-            }
-            if (!connPortEdited && ds.connectPort > 0) {
-                connPort = ds.connectPort.toString()
+    private fun requestShizukuPermission(activateAfterGrant: Boolean) {
+        shizukuPermPendingActivate = activateAfterGrant
+        actStatusColor = HyperBlue
+        actStatusText = "正在向 Shizuku 申请授权…"
+        ShizukuBootstrap.requestPermissionAsync(this) { granted, message ->
+            shizukuGranted = granted
+            refreshShizukuState()
+            actStatusText = message ?: ""
+            actStatusColor = if (granted) HyperGreen else HyperRed
+            if (granted && shizukuPermPendingActivate) {
+                shizukuPermPendingActivate = false
+                triggerShizukuActivation()
             }
         }
+    }
+
+    private fun triggerShizukuActivation() {
+        if (actWorking) return
+        if (!ShizukuBootstrap.hasPermission()) {
+            // Missing (or revoked) permission: ask first, then continue automatically.
+            requestShizukuPermission(true)
+            return
+        }
+        actWorking = true
+        actStatusColor = HyperBlue
+        actStatusText = "正在通过 Shizuku 激活 ExtBridge 服务…"
+        AdbBootstrap.shizukuBootstrapAsync(this, true, object : AdbBootstrap.ProgressListener {
+            override fun onStep(message: String?) {
+                actStatusColor = HyperBlue
+                actStatusText = message ?: ""
+            }
+
+            override fun onResult(success: Boolean, message: String?) {
+                actWorking = false
+                actStatusColor = if (success) HyperGreen else HyperRed
+                actStatusText = message ?: ""
+                if (success) {
+                    autoShizukuEnabled = true
+                }
+                refreshShizukuState()
+                refreshAllState(syncFromDaemon = true)
+            }
+        })
     }
 
     private fun triggerRootActivation() {
@@ -1932,52 +1993,6 @@ class MainActivity : ComponentActivity() {
                 if (success) {
                     autoRootEnabled = true
                 }
-                refreshAllState(syncFromDaemon = true)
-            }
-        })
-    }
-
-    private fun triggerWirelessPair() {
-        if (actWorking) return
-        val host = pairHost.trim()
-        val pPort = pairPort.trim().toIntOrNull() ?: 0
-        val code = pairCode.trim()
-        val cPort = connPort.trim().toIntOrNull() ?: 0
-        actWorking = true
-        actStatusColor = HyperBlue
-        actStatusText = "正在执行无线调试配对并启动守护进程…"
-        AdbBootstrap.pairAndBootstrapAsync(this, host, pPort, code, host, cPort, object : AdbBootstrap.ProgressListener {
-            override fun onStep(message: String?) {
-                actStatusColor = HyperBlue
-                actStatusText = message ?: ""
-            }
-
-            override fun onResult(success: Boolean, message: String?) {
-                actWorking = false
-                actStatusColor = if (success) HyperGreen else HyperRed
-                actStatusText = message ?: ""
-                refreshAllState(syncFromDaemon = true)
-            }
-        })
-    }
-
-    private fun triggerWirelessConnect() {
-        if (actWorking) return
-        val host = pairHost.trim()
-        val cPort = connPort.trim().toIntOrNull() ?: 0
-        actWorking = true
-        actStatusColor = HyperBlue
-        actStatusText = "正在直连无线调试并启动守护进程…"
-        AdbBootstrap.connectAndBootstrapAsync(this, host, cPort, object : AdbBootstrap.ProgressListener {
-            override fun onStep(message: String?) {
-                actStatusColor = HyperBlue
-                actStatusText = message ?: ""
-            }
-
-            override fun onResult(success: Boolean, message: String?) {
-                actWorking = false
-                actStatusColor = if (success) HyperGreen else HyperRed
-                actStatusText = message ?: ""
                 refreshAllState(syncFromDaemon = true)
             }
         })
@@ -2217,17 +2232,8 @@ class MainActivity : ComponentActivity() {
         handler.postDelayed(autoPromptCheck, 200L)
     }
 
-    private fun ensureNotifPermAndShowPairNotif(): Boolean {
-        if (!checkNotifPerm()) {
-            requestNotifOrOpenSettings(REQ_NOTIF_DEV_GATE)
-            return false
-        }
-        AdbBootstrap.showPairingNotification(this, null)
-        return true
-    }
-
-    private fun startSystemSettingsOnDisplay0(intent: Intent) {
-        val opts = ActivityOptions.makeBasic().setLaunchDisplayId(0)
+    private fun startSystemSettingsOnBuiltinDisplay(intent: Intent) {
+        val opts = ActivityOptions.makeBasic().setLaunchDisplayId(activeBuiltinDisplayId())
         startActivity(intent, opts.toBundle())
     }
 
@@ -2248,13 +2254,13 @@ class MainActivity : ComponentActivity() {
         waitingSettingsReturn = true
         Toast.makeText(this, "请在系统设置中开启通知权限后返回", Toast.LENGTH_LONG).show()
         runCatching {
-            startSystemSettingsOnDisplay0(
+            startSystemSettingsOnBuiltinDisplay(
                 Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
                     .putExtra(Settings.EXTRA_APP_PACKAGE, packageName),
             )
         }.onFailure {
             runCatching {
-                startSystemSettingsOnDisplay0(
+                startSystemSettingsOnBuiltinDisplay(
                     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")),
                 )
             }
@@ -2284,9 +2290,9 @@ class MainActivity : ComponentActivity() {
             waitingSettingsReturn = true
         }
         Toast.makeText(this, toastMsg, Toast.LENGTH_LONG).show()
-        runCatching { startSystemSettingsOnDisplay0(primaryIntent) }.onFailure {
+        runCatching { startSystemSettingsOnBuiltinDisplay(primaryIntent) }.onFailure {
             runCatching {
-                startSystemSettingsOnDisplay0(
+                startSystemSettingsOnBuiltinDisplay(
                     Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")),
                 )
             }
@@ -2328,7 +2334,7 @@ class MainActivity : ComponentActivity() {
     private fun completeDevGateAndLaunch() {
         pendingPermMode = PERM_MODE_NONE
         showPermDialog = false
-        Toast.makeText(this, "权限已齐备，正在发送无线配对通知", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "权限已齐备，正在打开开发者选项", Toast.LENGTH_SHORT).show()
         showDevGuideOrLaunchNow(forceDirect = false)
     }
 
@@ -2343,11 +2349,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun launchDeveloperOptionsNow() {
-        AdbBootstrap.showPairingNotification(this, null)
         runCatching {
-            startSystemSettingsOnDisplay0(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+            startSystemSettingsOnBuiltinDisplay(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
         }.onFailure {
-            runCatching { startSystemSettingsOnDisplay0(Intent(Settings.ACTION_SETTINGS)) }
+            runCatching { startSystemSettingsOnBuiltinDisplay(Intent(Settings.ACTION_SETTINGS)) }
         }
     }
 }

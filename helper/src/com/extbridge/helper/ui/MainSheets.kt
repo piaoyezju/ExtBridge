@@ -216,25 +216,20 @@ fun ActivationSheet(
     hasSuHint: Boolean,
     autoRootEnabled: Boolean,
     onAutoRootChange: (Boolean) -> Unit,
-    mdnsHint: String,
-    pairHost: String,
-    onPairHostChange: (String) -> Unit,
-    pairPort: String,
-    onPairPortChange: (String) -> Unit,
-    pairCode: String,
-    onPairCodeChange: (String) -> Unit,
-    connPort: String,
-    onConnPortChange: (String) -> Unit,
+    shizukuStatus: String,
+    shizukuStatusColor: Color,
+    shizukuGranted: Boolean,
+    autoShizukuEnabled: Boolean,
+    onAutoShizukuChange: (Boolean) -> Unit,
+    onRequestShizukuPerm: () -> Unit,
+    onOpenShizukuApp: () -> Unit,
+    onRunShizuku: () -> Unit,
     actStatusText: String,
     actStatusColor: Color,
     working: Boolean,
     pcAdbCommand: String,
-    onSelectWirelessTab: () -> Unit,
     onRunRoot: () -> Unit,
     onOpenDevOptions: () -> Unit,
-    onSendPairNotif: () -> Unit,
-    onRunWirelessPair: () -> Unit,
-    onRunWirelessConnect: () -> Unit,
     onCopyAdbCmd: () -> Unit,
     onSkip: () -> Unit,
 ) {
@@ -259,17 +254,70 @@ fun ActivationSheet(
             )
 
             TabRowWithContour(
-                tabs = listOf("Root 激活", "无线调试", "电脑 ADB"),
+                tabs = listOf("Shizuku 激活", "Root 激活", "电脑 ADB"),
                 selectedTabIndex = tabIdx,
-                onTabSelected = { next ->
-                    tabIdx = next
-                    if (next == 1) onSelectWirelessTab()
-                },
+                onTabSelected = { next -> tabIdx = next },
                 modifier = Modifier.fillMaxWidth(),
             )
 
             when (tabIdx) {
                 0 -> {
+                    Card(insideMargin = PaddingValues(14.dp)) {
+                        Text(
+                            text = "Shizuku 以系统 shell(或 root) 身份运行。授权后无需开启无线调试、也无需输入 6 位配对码，应用内可直接释放并拉起守护进程。",
+                            fontSize = 12.5.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = shizukuStatus,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = shizukuStatusColor,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            TextButton(
+                                text = if (shizukuGranted) "Shizuku 已授权" else "授权 Shizuku",
+                                enabled = !working && !shizukuGranted,
+                                onClick = onRequestShizukuPerm,
+                                colors = ButtonDefaults.textButtonColorsPrimary(),
+                                modifier = Modifier.weight(1f),
+                            )
+                            TextButton(
+                                text = "打开 Shizuku",
+                                onClick = onOpenShizukuApp,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        TextButton(
+                            text = if (working) "正在通过 Shizuku 激活…" else "Shizuku 一键激活服务",
+                            enabled = !working,
+                            onClick = onRunShizuku,
+                            colors = ButtonDefaults.textButtonColorsPrimary(),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    Card {
+                        SwitchPreference(
+                            title = "启动软件时自动 Shizuku 激活",
+                            summary = "已授权 Shizuku 时，打开软件自动拉起守护进程",
+                            checked = autoShizukuEnabled,
+                            onCheckedChange = onAutoShizukuChange,
+                        )
+                    }
+                    TextButton(
+                        text = "打开开发者选项（USB 调试安全设置）",
+                        onClick = onOpenDevOptions,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+
+                1 -> {
                     Card(insideMargin = PaddingValues(14.dp)) {
                         Text(
                             text = if (hasSuHint) {
@@ -295,94 +343,6 @@ fun ActivationSheet(
                             summary = "进入应用发现守护进程未运行时静默拉起",
                             checked = autoRootEnabled,
                             onCheckedChange = onAutoRootChange,
-                        )
-                    }
-                }
-
-                1 -> {
-                    Card(
-                        colors = CardDefaults.defaultColors(
-                            color = MiuixTheme.colorScheme.primary.copy(alpha = 0.10f),
-                        ),
-                        insideMargin = PaddingValues(12.dp),
-                    ) {
-                        Text(
-                            text = mdnsHint.ifBlank { "正在通过 mDNS 自动扫描本机无线调试配对与连接端口…" },
-                            fontSize = 12.sp,
-                            color = MiuixTheme.colorScheme.primary,
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        TextButton(
-                            text = "1. 开启无线调试",
-                            onClick = onOpenDevOptions,
-                            colors = ButtonDefaults.textButtonColorsPrimary(),
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(
-                            text = "刷新配对通知",
-                            onClick = onSendPairNotif,
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-
-                    TextField(
-                        value = pairHost,
-                        onValueChange = onPairHostChange,
-                        label = "本机 IP 地址 (如 192.168.31.20)",
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        TextField(
-                            value = pairPort,
-                            onValueChange = onPairPortChange,
-                            label = "配对端口",
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextField(
-                            value = pairCode,
-                            onValueChange = onPairCodeChange,
-                            label = "6 位配对码",
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                    TextField(
-                        value = connPort,
-                        onValueChange = onConnPortChange,
-                        label = "连接端口 (已配对过仅填此项即可)",
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        TextButton(
-                            text = "配对并激活",
-                            enabled = !working,
-                            onClick = onRunWirelessPair,
-                            colors = ButtonDefaults.textButtonColorsPrimary(),
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(
-                            text = "已配对·直连",
-                            enabled = !working,
-                            onClick = onRunWirelessConnect,
-                            modifier = Modifier.weight(1f),
                         )
                     }
                 }
@@ -451,9 +411,9 @@ fun PermissionChecklistDialog(
         show = show,
         title = if (isDevGate) "前往开发者选项前 · 请补齐权限" else "运行权限健康检查",
         summary = if (isDevGate) {
-            "为确保无线调试顶部配对通知、外接鼠标准星与全局手势正常生效，建议先开启以下权限："
+            "为确保外接鼠标准星、全局手势与桌面 Dock 正常生效，建议先开启以下权限："
         } else {
-            "外接桌面 Dock、鼠标浮层、全局返回手势及无线配对通知依赖以下三项核心权限："
+            "外接桌面 Dock、鼠标浮层及全局返回手势依赖以下三项核心权限："
         },
         onDismissRequest = onSkipOrContinue,
     ) {
@@ -461,7 +421,7 @@ fun PermissionChecklistDialog(
             modifier = Modifier.fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            PermItemRow("通知栏常驻与配对框权限", notifOk, onGrantNotif)
+            PermItemRow("通知栏常驻权限", notifOk, onGrantNotif)
             PermItemRow("悬浮窗与外接光标权限", overlayOk, onGrantOverlay)
             PermItemRow("无障碍手势与浮层权限 (必需)", a11yOk, onGrantA11y)
 
@@ -544,7 +504,7 @@ fun DevOptionsGuideDialog(
     OverlayDialog(
         show = show,
         title = "首次前往「开发者选项」指引",
-        summary = "已发送无线调试配对通知至状态栏。进入开发者选项后请一并开启：",
+        summary = "进入开发者选项后请一并开启：",
         onDismissRequest = onDismiss,
     ) {
         Column(
@@ -556,8 +516,9 @@ fun DevOptionsGuideDialog(
                 insideMargin = PaddingValues(14.dp),
             ) {
                 Text(
-                    text = "1. 无线调试：点击「使用配对码配对设备」，下拉顶部通知即可直接填入 6 位配对码。\n\n" +
-                        "2. USB 调试（安全设置）：Xiaomi HyperOS 必开项，否则外接屏鼠标与触控板点击会被系统拦截。",
+                    text = "1. USB 调试：Xiaomi HyperOS 必开项，否则外接屏鼠标与触控板点击会被系统拦截。\n\n" +
+                        "2. USB 调试（安全设置）：若上面一项为灰色，请先在「开发者选项 → USB 调试」中允许调试后再开启。\n\n" +
+                        "提示：若使用 Shizuku 激活，无需开启无线调试；Shizuku 服务已在运行时可直接返回应用一键激活。",
                     fontSize = 13.sp,
                     color = MiuixTheme.colorScheme.onSurfaceContainer,
                 )

@@ -93,8 +93,13 @@ import java.util.regex.Pattern;
 
 public class ExtBridge implements Runnable {
     private static final String BINDER_DESC = "com.extbridge.daemon.IBridgeControl";
-    private static final String EXPECTED_HELPER_CERT_SHA256 =
-            "e4f67b3012a16633006c64bfc9d5a95c7bdda10826bd729777c2a3066f49117c";
+    private static final String[] TRUSTED_HELPER_CERT_SHA256 = {
+            // Official release certificate (GitHub Releases / CI, built from exthelper.p12)
+            "e4f67b3012a16633006c64bfc9d5a95c7bdda10826bd729777c2a3066f49117c",
+            // Local development certificate (hzgndz.keystore, CN=sunfeng / O=hzgndz).
+            // Keeps locally signed builds usable without touching the official trust anchor.
+            "cf854b8d925f5ccf6de524143a65abc0c2c1b910574777db138c91e3b0525bc3",
+    };
     private static final Pattern PKG_NAME_PATTERN = Pattern.compile("^[a-zA-Z0-9_]+(\\.[a-zA-Z0-9_]+)+$");
     private static final Pattern CLS_NAME_PATTERN = Pattern.compile("^[a-zA-Z0-9_$]+(\\.[a-zA-Z0-9_$]+)+$");
     private static final String CONF_PATH = "/data/local/tmp/extbridge.conf";
@@ -205,6 +210,7 @@ public class ExtBridge implements Runnable {
     private static volatile Object sSideBbq;
     private static volatile Surface sSideSurf;
     private static volatile Object sSideMirSc;
+    private static volatile int sMirrorSrcId = Display.DEFAULT_DISPLAY;
     private static volatile Object sMir0WrapSc;
     private static volatile Object sMir0BgSc;
     private static volatile Object sMir0Sc;
@@ -1030,6 +1036,16 @@ public class ExtBridge implements Runnable {
                     sSideVdAttempted = false;
                     cleanupDisplay(false);
                 }
+                // Foldables expose the cover panel as its own logical display (Samsung Flip/Fold:
+                // display 0 = inner, extra INTERNAL display = cover). Mirroring display 0 while the
+                // device is folded mirrors a sleeping display and can even force the inner panel to
+                // the top, blanking the cover screen - so follow whichever built-in panel is active.
+                int activeSrcId = pickActiveBuiltinDisplayId();
+                if (sMir0Sc != null && activeSrcId > 0 && activeSrcId != sMirrorSrcId) {
+                    System.out.println("EXTBRIDGE_MIRROR_SRC_SWITCH " + sMirrorSrcId + " -> " + activeSrcId);
+                    sSideVdAttempted = false;
+                    cleanupDisplay(false);
+                }
                 boolean needSide = (sMirrorSideMode > 0);
                 boolean stockFallback = "NATIVE_MIRROR_STOCK".equals(sRenderMode);
                 boolean sideRetryNeeded = needSide && sSideVd == null && (!sSideVdAttempted || sLastSideVdAttemptMode != sMirrorSideMode);
@@ -1075,8 +1091,12 @@ public class ExtBridge implements Runnable {
             if (extId != sExtId || sVd == null) {
                 cleanupDisplay(false);
                 attachDisplay(extId);
+                scheduleRehomeExtLauncher(sVdId);
                 sLastPushedExtId = extId;
             } else {
+                // Safety net: an HDMI hotplug may make One UI drop the ext launcher on display 0,
+                // which would flip a folded device to the (invisible) inner panel.
+                enforceExtLauncherOffPhoneDisplay();
                 if (physSizeChanged) {
                     applySurfaceTransform();
                 }
@@ -1337,15 +1357,20 @@ public class ExtBridge implements Runnable {
             @Override public void onDisplayAdded(int displayId) {}
             @Override public void onDisplayRemoved(int displayId) {}
             @Override public void onDisplayChanged(int displayId) {
-                if (displayId == 0 && sMirrorMode == 1 && !sShuttingDown && sHandler != null) {
-                    Runnable syncGeom = () -> {
-                        if (!sShuttingDown && sMirrorMode == 1 && sMir0Sc != null) {
-                            updateMirrorGeometry(true);
-                        }
-                    };
-                    sHandler.post(syncGeom);
-                    sHandler.postDelayed(syncGeom, 120L);
-                }
+                if (sMirrorMode != 1 || sShuttingDown || sHandler == null) return;
+                Runnable syncGeom = () -> {
+                    if (sShuttingDown || sMirrorMode != 1 || sMir0Sc == null) return;
+                    int active = pickActiveBuiltinDisplayId();
+                    if (active > 0 && active != sMirrorSrcId) {
+                        // Fold/unfold swapped the active built-in panel: rebuild from the new source
+                        System.out.println("EXTBRIDGE_MIRROR_SRC_REBUILD " + sMirrorSrcId + " -> " + active);
+                        sForceRebuild = true;
+                        return;
+                    }
+                    updateMirrorGeometry(true);
+                };
+                sHandler.post(syncGeom);
+                sHandler.postDelayed(syncGeom, 150L);
             }
         };
         try {
@@ -1368,7 +1393,9 @@ public class ExtBridge implements Runnable {
             Class<?> scCls = Class.forName("android.view.SurfaceControl");
             Class<?> bCls = Class.forName("android.view.SurfaceControl$Builder");
 
-            Object mir0 = mirrorDisplaySafe(0);
+            int picked = pickActiveBuiltinDisplayId();
+            final int srcDisplayId = (picked > 0) ? picked : sMirrorSrcId;
+            Object mir0 = mirrorDisplaySafe(srcDisplayId);
             if (mir0 == null) {
                 // Ultimate safety fallback to pure system mirror if mirrorDisplay(0) is unavailable on this ROM
                 sExtId = extId;
@@ -1416,6 +1443,8 @@ public class ExtBridge implements Runnable {
             sMir0BgSc = bCls.getMethod("build").invoke(bMirBg);
 
             sMir0Sc = mir0;
+            sMirrorSrcId = srcDisplayId;
+            System.out.println("EXTBRIDGE_MIRROR_SRC id=" + srcDisplayId);
             Object txInit = newSurfaceTx();
             try {
                 sTxReparent.invoke(txInit, sMir0Sc, sMir0WrapSc);
@@ -1732,7 +1761,7 @@ public class ExtBridge implements Runnable {
                 long now = SystemClock.uptimeMillis();
                 if (now - sLastMirD0SizeCheckMs >= 240L) {
                     sLastMirD0SizeCheckMs = now;
-                    Point d0Pt = readDisplay0RealSize();
+                    Point d0Pt = readDisplayRealSize(sMirrorSrcId);
                     if (d0Pt.x > 0 && d0Pt.y > 0 && (d0Pt.x != sD0W || d0Pt.y != sD0H)) {
                         updateMirrorGeometry(true);
                     }
@@ -1742,7 +1771,7 @@ public class ExtBridge implements Runnable {
                     long idleMs = now - lastActiveMoveMs;
                     delayMs = (idleMs < 500L) ? 16 : (idleMs < 2000L ? 50 : 150);
                     try {
-                        Object res = sMGetCursorPos.invoke(sIIm, 0);
+                        Object res = sMGetCursorPos.invoke(sIIm, sMirrorSrcId);
                         if (res instanceof PointF) {
                             PointF pt = (PointF) res;
                             if (Float.isFinite(pt.x) && Float.isFinite(pt.y)
@@ -1825,11 +1854,55 @@ public class ExtBridge implements Runnable {
         sMirCursorVisible = false;
     }
 
-    private static Point readDisplay0RealSize() {
+    private static boolean isDisplayActiveOn(Display d) {
+        if (d == null) return false;
+        try {
+            int st = d.getState();
+            return st == Display.STATE_ON || st == Display.STATE_ON_SUSPEND;
+        } catch (Throwable t) {
+            return true;
+        }
+    }
+
+    /**
+     * The built-in panel the user is actually looking at right now.
+     *
+     * <p>Foldables (e.g. Galaxy Z Flip/Fold) register the cover panel as an extra
+     * {@link Display#TYPE_INTERNAL} display while the inner panel keeps display id 0. When folded,
+     * display 0 is OFF and only the extra panel is ON - mirroring display 0 there would show black
+     * and can also drag focus back to the folded-off inner panel.
+     *
+     * @return display id of the active built-in panel, or -1 when no built-in panel is awake
+     *         (screen off). Callers keep their current source in that case.
+     */
+    private static int pickActiveBuiltinDisplayId() {
+        try {
+            if (sDm == null) return Display.DEFAULT_DISPLAY;
+            Display d0 = sDm.getDisplay(Display.DEFAULT_DISPLAY);
+            if (isDisplayActiveOn(d0)) return Display.DEFAULT_DISPLAY;
+            Display[] all = sDm.getDisplays();
+            if (all != null) {
+                for (Display d : all) {
+                    if (d == null) continue;
+                    int id = d.getDisplayId();
+                    // Built-in panels always get the lowest ids (0 = inner, 1 = foldable cover);
+                    // HDMI/Cast/VirtualDisplays are allocated later. Do not rely on the hidden
+                    // Display#getType() here (reflection is unavailable in some processes).
+                    if (id < 1 || id > 5) continue;
+                    if (getDisplayType(d) == 2) continue; // never mirror an external display as "phone"
+                    if (!isDisplayActiveOn(d)) continue;
+                    return id;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return -1;
+    }
+
+    private static Point readDisplayRealSize(int displayId) {
         Point p = new Point(0, 0);
         try {
             if (sIDm != null && sMGetDisplayInfo != null) {
-                Object di = sMGetDisplayInfo.invoke(sIDm, 0);
+                Object di = sMGetDisplayInfo.invoke(sIDm, displayId);
                 if (di != null) {
                     int lw = readIntField(di, "logicalWidth", 0);
                     int lh = readIntField(di, "logicalHeight", 0);
@@ -1842,9 +1915,9 @@ public class ExtBridge implements Runnable {
         } catch (Throwable ignored) {}
         try {
             if (sDm != null) {
-                Display d0 = sDm.getDisplay(0);
-                if (d0 != null) {
-                    d0.getRealSize(p);
+                Display d = sDm.getDisplay(displayId);
+                if (d != null) {
+                    d.getRealSize(p);
                 }
             }
         } catch (Throwable ignored) {}
@@ -1854,7 +1927,7 @@ public class ExtBridge implements Runnable {
     private static boolean updateMirrorGeometry(boolean notifyOnChange) {
         try {
             if (sRootSc == null || sBgSc == null || sMir0Sc == null || sMir0WrapSc == null || sDm == null) return false;
-            Point d0Pt = readDisplay0RealSize();
+            Point d0Pt = readDisplayRealSize(sMirrorSrcId);
             int curD0W = (d0Pt.x > 0 && d0Pt.y > 0) ? d0Pt.x : 1920;
             int curD0H = (d0Pt.x > 0 && d0Pt.y > 0) ? d0Pt.y : 1200;
 
@@ -2047,6 +2120,41 @@ public class ExtBridge implements Runnable {
         }
     }
 
+    /**
+     * Finishes leftover ExtBridge ext-desktop launcher tasks living on a VirtualDisplay before it is
+     * released. Otherwise the platform migrates them onto the phone's active display (on foldables
+     * that is the cover panel), so the "DeX desktop" would hijack the phone screen.
+     */
+    private static void removeExtLauncherTasksOnDisplay(int displayId) {
+        if (displayId <= 0 || sAtm == null) return;
+        try {
+            Object res = sAtm.getClass().getMethod("getAllRootTaskInfosOnDisplay", int.class)
+                    .invoke(sAtm, displayId);
+            if (!(res instanceof List)) return;
+            List<?> infos = (List<?>) res;
+            if (infos.isEmpty()) return;
+            Method removeM = null;
+            for (Method m : sAtm.getClass().getMethods()) {
+                if ("removeTask".equals(m.getName()) && m.getParameterCount() == 1
+                        && m.getParameterTypes()[0] == int.class) {
+                    removeM = m;
+                    break;
+                }
+            }
+            if (removeM == null) return;
+            for (Object info : infos) {
+                if (info == null) continue;
+                try {
+                    Object top = info.getClass().getField("topActivity").get(info);
+                    String cn = (top instanceof ComponentName) ? ((ComponentName) top).flattenToShortString() : "";
+                    if (cn == null || !cn.startsWith("com.extbridge.helper/.LauncherActivity")) continue;
+                    int taskId = readIntField(info, "taskId", -1);
+                    if (taskId > 0) removeM.invoke(sAtm, taskId);
+                } catch (Throwable ignored) {}
+            }
+        } catch (Throwable ignored) {}
+    }
+
     private static void cleanupDisplay(boolean unbindWm) {
         synchronized (sDisplayLock) {
             if (unbindWm && sShuttingDown && sCleanupDoneOnShutdown) {
@@ -2085,7 +2193,13 @@ public class ExtBridge implements Runnable {
                 }
             } catch (Throwable ignored) {}
             try {
-                if (sVd != null) { sVd.release(); sVd = null; }
+                if (sVd != null) {
+                    // Kill the ext-desktop launcher first: a released VD would otherwise migrate it
+                    // onto the phone's active display (cover panel when folded).
+                    try { removeExtLauncherTasksOnDisplay(sVdId); } catch (Throwable ignored) {}
+                    sVd.release();
+                    sVd = null;
+                }
             } catch (Throwable ignored) {}
             sCreatedVdW = 0;
             sCreatedVdH = 0;
@@ -2851,18 +2965,19 @@ public class ExtBridge implements Runnable {
         }
     }
 
-    private static void reassertDisplay0FocusForMirrorCapture() {
+    private static void reassertMirrorSourceFocus() {
         try {
-            if (sMirrorMode == 1 && sMirMouseCaptured && sWm != null && sMMoveDisplayToTop != null) {
-                sMMoveDisplayToTop.invoke(sWm, 0, "extMirSideCap");
+            if (sMirrorMode == 1 && sMirMouseCaptured && sWm != null && sMMoveDisplayToTop != null
+                    && pickActiveBuiltinDisplayId() > 0) {
+                sMMoveDisplayToTop.invoke(sWm, sMirrorSrcId, "extMirSideCap");
             }
         } catch (Throwable ignored) {}
     }
 
     private static void scheduleMirrorSideClickPostChecks() {
         if (sHandler == null || sShuttingDown) return;
-        sHandler.postDelayed(ExtBridge::reassertDisplay0FocusForMirrorCapture, 22L);
-        sHandler.postDelayed(ExtBridge::reassertDisplay0FocusForMirrorCapture, 85L);
+        sHandler.postDelayed(ExtBridge::reassertMirrorSourceFocus, 22L);
+        sHandler.postDelayed(ExtBridge::reassertMirrorSourceFocus, 85L);
         final int checkSideVdId = sSideVdId;
         if (checkSideVdId > 0) {
             sBgSchedExec.schedule(() -> rescueStrayTasksOnSideVd(checkSideVdId), 35L, TimeUnit.MILLISECONDS);
@@ -2893,7 +3008,7 @@ public class ExtBridge implements Runnable {
                     try { moveM.invoke(sAtm, tid, 0); } catch (Throwable ignored) {}
                 }
             }
-            reassertDisplay0FocusForMirrorCapture();
+            reassertMirrorSourceFocus();
         } catch (Throwable ignored) {}
     }
 
@@ -2934,7 +3049,7 @@ public class ExtBridge implements Runnable {
                 }
                 if (actionType == 9) { // REASSERT_D0_FOCUS while keeping sidebar capture alive
                     if (!sMirMouseCaptured) return false;
-                    reassertDisplay0FocusForMirrorCapture();
+                    reassertMirrorSourceFocus();
                     return true;
                 }
                 if (!sMirMouseCaptured && actionType != 5) {
@@ -3018,7 +3133,7 @@ public class ExtBridge implements Runnable {
                             sMouseDownTime = now;
                             sMouseButtons = MotionEvent.BUTTON_PRIMARY;
                             dispatchTouchMotion(MotionEvent.ACTION_DOWN, now, sCursorX, sCursorY, sSideVdId);
-                            reassertDisplay0FocusForMirrorCapture();
+                            reassertMirrorSourceFocus();
                         }
                         break;
                     }
@@ -3164,6 +3279,59 @@ public class ExtBridge implements Runnable {
         }
     }
 
+    /**
+     * Some OEM window managers (e.g. Samsung One UI on foldables) silently ignore
+     * ActivityOptions#setLaunchDisplayId for shell-initiated launches and drop the activity on the
+     * display the user is looking at (cover panel when folded). Re-home the task onto our
+     * VirtualDisplay afterwards so the extended desktop never hijacks the phone screen.
+     */
+    private static void enforceLaunchedTaskOnVd(String pkg, String cls, int vdId) {
+        if (vdId <= 0 || sAtm == null || pkg == null || cls == null) return;
+        try {
+            List<?> running = invokeTaskQuery("getTasks");
+            if (running == null) return;
+            for (Object t : running) {
+                if (t == null) continue;
+                if (!pkg.equals(extractTaskPkg(t))) continue;
+                Object top = null;
+                try { top = t.getClass().getField("topActivity").get(t); } catch (Throwable ignored) {}
+                if (!(top instanceof ComponentName)) continue;
+                ComponentName cn = (ComponentName) top;
+                if (!cls.equals(cn.getClassName())) continue;
+                int did = readIntField(t, "displayId", -1);
+                int tid = readIntField(t, "taskId", readIntField(t, "id", -1));
+                if (tid <= 0 || did == vdId || did < 0) continue;
+                for (Method m : sAtm.getClass().getMethods()) {
+                    if ("moveRootTaskToDisplay".equals(m.getName()) && m.getParameterCount() == 2) {
+                        m.invoke(sAtm, tid, vdId);
+                        System.out.println("EXTBRIDGE_TASK_REHOMED tid=" + tid + " " + pkg + "/" + cls
+                                + " from=" + did + " to=" + vdId);
+                        break;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {}
+    }
+
+    /** Re-homes the ext-desktop launcher onto the VD a few times right after a hotplug launch. */
+    private static void scheduleRehomeExtLauncher(int vdId) {
+        if (sHandler == null || vdId <= 0) return;
+        for (long d : new long[]{80L, 160L, 320L, 640L, 1200L, 2000L}) {
+            sHandler.postDelayed(() -> enforceLaunchedTaskOnVd(
+                    "com.extbridge.helper", "com.extbridge.helper.LauncherActivity", vdId), d);
+        }
+    }
+
+    /**
+     * Safety net: in extended-desktop mode the ext launcher must never stay on a built-in panel.
+     * OEMs occasionally drop it on display 0 after an HDMI hotplug, which makes One UI switch the
+     * foldable to the (folded-off) inner panel.
+     */
+    private static void enforceExtLauncherOffPhoneDisplay() {
+        if (sMirrorMode != 0 || sVdId <= 0) return;
+        enforceLaunchedTaskOnVd("com.extbridge.helper", "com.extbridge.helper.LauncherActivity", sVdId);
+    }
+
     private static boolean launchComponentOnVd(String pkg, String cls) {
         try {
             if (sVdId <= 0 || sAtm == null || sMStartActivity == null) return false;
@@ -3205,6 +3373,10 @@ public class ExtBridge implements Runnable {
             ActivityOptions opts = makeExtLaunchOptionsForMode(sVdId, mode);
             Object rc = sMStartActivity.invoke(sAtm, null, "com.android.shell", null, intent, null, null, null, 0, 0, null, opts.toBundle());
             if (sHandler != null) {
+                final int launchVd = sVdId;
+                for (long d : new long[]{80L, 160L, 320L, 640L, 1200L, 2000L}) {
+                    sHandler.postDelayed(() -> enforceLaunchedTaskOnVd(pkg, cls, launchVd), d);
+                }
                 sHandler.postDelayed(() -> enforceRunningExtTasksFullscreen(sFullscreenPolicy == 1), 180L);
             }
             return !(rc instanceof Integer) || (Integer) rc >= 0;
@@ -3574,6 +3746,14 @@ public class ExtBridge implements Runnable {
         return ok;
     }
 
+    private static boolean isTrustedHelperCert(String hex) {
+        if (hex == null) return false;
+        for (String trusted : TRUSTED_HELPER_CERT_SHA256) {
+            if (trusted.equalsIgnoreCase(hex)) return true;
+        }
+        return false;
+    }
+
     private static int getVerifiedHelperUid() {
         if (sCtx == null) return -1;
         try {
@@ -3604,7 +3784,7 @@ public class ExtBridge implements Runnable {
             for (byte b : digest) {
                 hex.append(String.format(Locale.US, "%02x", b & 0xff));
             }
-            if (!EXPECTED_HELPER_CERT_SHA256.equalsIgnoreCase(hex.toString())) {
+            if (!isTrustedHelperCert(hex.toString())) {
                 System.err.println("EXTBRIDGE_SECURITY_REJECT untrusted com.extbridge.helper cert=" + hex);
                 sVerifiedHelperUid = -1;
                 return -1;

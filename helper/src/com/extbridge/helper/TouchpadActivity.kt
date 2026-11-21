@@ -207,10 +207,12 @@ class TouchpadActivity : ComponentActivity() {
     private fun ensureOnDisplay0(): Boolean {
         return try {
             val d = display
-            if (d != null && d.displayId != 0) {
+            // Foldables: the cover panel is its own built-in display; never bounce between them,
+            // only leave real external/virtual displays and land on the active built-in panel.
+            if (d != null && !isBuiltinPanel(d)) {
                 val i = Intent(this, TouchpadActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
-                val opts = ActivityOptions.makeBasic().setLaunchDisplayId(0)
+                val opts = ActivityOptions.makeBasic().setLaunchDisplayId(BridgeService.getActiveBuiltinDisplayId(this))
                 startActivity(i, opts.toBundle())
                 finishAndRemoveTask()
                 true
@@ -221,6 +223,9 @@ class TouchpadActivity : ComponentActivity() {
             false
         }
     }
+
+    /** Built-in panel ids are the lowest ones (0 = inner screen, 1 = foldable cover panel). */
+    private fun isBuiltinPanel(d: android.view.Display): Boolean = d.displayId in 0..5
 
     private fun refreshStatus() {
         Thread {

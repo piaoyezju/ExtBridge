@@ -124,10 +124,10 @@ try {
 }
 
 $EXPECTED_CERT_SHA256 = "e4f67b3012a16633006c64bfc9d5a95c7bdda10826bd729777c2a3066f49117c"
-# A developer-provided local keystore (hzgndz.keystore or local.properties keystore.file) has its own
+# A developer-provided local keystore (local.keystore or local.properties keystore.file) has its own
 # certificate, so the official-fingerprint gate only applies to the official key material.
 $localPropsFile = Join-Path $ROOT "local.properties"
-$hasCustomLocalKeystore = (Test-Path (Join-Path $ROOT "hzgndz.keystore")) -or (
+$hasCustomLocalKeystore = (Test-Path (Join-Path $ROOT "local.keystore")) -or (
     (Test-Path $localPropsFile) -and (Select-String -Path $localPropsFile -Pattern '^keystore\.file=' -Quiet)
 )
 $requireReleaseKey = ($env:EXTBRIDGE_REQUIRE_RELEASE_KEY -eq "1") -or ($env:GITHUB_REF -like "refs/tags/v*")

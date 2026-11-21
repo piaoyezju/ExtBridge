@@ -70,8 +70,13 @@ android {
     fun localProp(key: String): String? = localProps.getProperty(key)?.trim()?.takeIf { it.isNotEmpty() }
 
     val p12File = rootProject.file("exthelper.p12")
-    val hzgndzKs = rootProject.file("hzgndz.keystore")
-    val localKs = localProp("keystore.file")?.let { file(it) }
+    // Optional local developer keystore in the repo root (git-ignored via *.keystore)
+    val localRepoKs = rootProject.file("local.keystore")
+    // Relative `keystore.file` values resolve against the module first, then the repo root
+    val localKs = localProp("keystore.file")?.let { f ->
+        val moduleRelative = file(f)
+        if (moduleRelative.exists()) moduleRelative else rootProject.file(f)
+    }
     if (localKs != null && !localKs.exists()) {
         throw GradleException("keystore.file in local.properties points to non-existent file: ${localKs.absolutePath}")
     }
@@ -83,7 +88,7 @@ android {
         envKs != null -> envKs
         localKs != null -> localKs
         p12File.exists() -> p12File
-        hzgndzKs.exists() -> hzgndzKs
+        localRepoKs.exists() -> localRepoKs
         else -> null
     }
     val keystoreType = localProp("keystore.type")
@@ -109,7 +114,7 @@ android {
         (System.getenv("EXTBRIDGE_ALLOW_UNSIGNED_RELEASE") == "1")
             || (project.findProperty("allowUnsignedRelease")?.toString()?.equals("true", ignoreCase = true) == true)
         )
-    // A developer-provided local keystore (local.properties / hzgndz.keystore) has its own
+    // A developer-provided local keystore (local.properties / local.keystore) has its own
     // certificate, so the official-fingerprint gate only applies to the official key material.
     val isCustomLocalKeystore = activeKs != null && activeKs != envKs && activeKs != p12File
     val allowCustomCert = project.findProperty("allowCustomReleaseCert")?.toString()?.equals("true", ignoreCase = true) == true
@@ -118,7 +123,7 @@ android {
 
     if ((requireReleaseKey || (isReleaseTaskRequested && !allowUnsignedRelease)) && activeKs == null) {
         throw GradleException(
-            "Release build requires a keystore (EXTBRIDGE_KEYSTORE, local.properties keystore.file, exthelper.p12 or hzgndz.keystore). " +
+            "Release build requires a keystore (EXTBRIDGE_KEYSTORE, local.properties keystore.file, exthelper.p12 or local.keystore). " +
                 "Never falls back to debug signing. For keyless reproducible-build verification only, pass -PallowUnsignedRelease=true (or EXTBRIDGE_ALLOW_UNSIGNED_RELEASE=1)."
         )
     }

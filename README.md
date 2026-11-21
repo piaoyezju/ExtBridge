@@ -135,7 +135,7 @@ powershell -ExecutionPolicy Bypass -File .\build_v3.ps1
 **签名**：构建会按以下优先级自动选择密钥库（绝不回退 Debug 签名）：
 1. `EXTBRIDGE_KEYSTORE` / `EXTBRIDGE_KEYSTORE_PASS` 环境变量（CI 用）；
 2. `local.properties` 中的 `keystore.file` / `keystore.alias` / `keystore.type` / `keystore.pass`（本地开发，`local.properties` 已被 git 忽略）；
-3. 仓库根目录的 `exthelper.p12`（官方发布证书，会校验 SHA-256 指纹）或 `hzgndz.keystore`（本地自定义证书，JKS，别名自动探测）。
+3. 仓库根目录的 `exthelper.p12`（官方发布证书，会校验 SHA-256 指纹）或 `local.keystore`（本地自签名证书，JKS，别名自动探测）。
 
 如需无密钥可复现构建校验，可设置 `$env:EXTBRIDGE_ALLOW_UNSIGNED_RELEASE="1"` 生成 `exthelper-unsigned.apk`。完整版本更新历史请见 [CHANGELOG.md](CHANGELOG.md)。
 

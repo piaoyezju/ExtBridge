@@ -96,9 +96,9 @@ public class ExtBridge implements Runnable {
     private static final String[] TRUSTED_HELPER_CERT_SHA256 = {
             // Official release certificate (GitHub Releases / CI, built from exthelper.p12)
             "e4f67b3012a16633006c64bfc9d5a95c7bdda10826bd729777c2a3066f49117c",
-            // Local development certificate (locally built APK signed with a developer keystore).
+            // Local development certificate (self-signed release keystore, CN=piaoyezju).
             // Keeps self-signed builds usable without touching the official trust anchor.
-            "cf854b8d925f5ccf6de524143a65abc0c2c1b910574777db138c91e3b0525bc3",
+            "f25ee8fdff83c0f30cd2440225b023a76ab01a99360a82b95be9e1ce8fc66cd0",
     };
     private static final Pattern PKG_NAME_PATTERN = Pattern.compile("^[a-zA-Z0-9_]+(\\.[a-zA-Z0-9_]+)+$");
     private static final Pattern CLS_NAME_PATTERN = Pattern.compile("^[a-zA-Z0-9_$]+(\\.[a-zA-Z0-9_$]+)+$");

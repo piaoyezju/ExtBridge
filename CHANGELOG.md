@@ -13,7 +13,7 @@
 - 激活抽屉首页改为 **「Shizuku 激活」**：实时状态提示、`授权 Shizuku`、`Shizuku 一键激活服务`、`打开 Shizuku`、`启动时自动 Shizuku 激活`（默认开启）；移除 mDNS 配对端口、6 位配对码、连接端口输入与通知栏填码入口，`Root 激活` 与 `电脑 ADB` 两种方式完整保留。
 - 启动/回到前台时自动刷新 Shizuku 状态；打开应用若已授权 Shizuku 则优先静默激活（失败回退到激活抽屉），Root 自动激活逻辑保留为次级兜底。
 - 旧版内置 `libadb.so` 无线调试配对实现（`AdbBootstrap` 配对/mDNS、`AdbPairingReceiver` 通知栏填码）**已彻底删除**：移除 `helper/jniLibs/arm64-v8a/libadb.so`、`AdbPairingReceiver`、`AdbBootstrap` 内的 mDNS 发现/`adb pair`/`adb connect`/私有 adb socket/配对通知全部代码，剔除 `CHANGE_WIFI_MULTICAST_STATE` 权限与 `ndk.abiFilters` / `jniLibs` 打包配置，APK 体积由 5.56 MB 降至 3.36 MB。
-- **签名**：本地开发改为读取根目录 `local.keystore`（JKS，别名可用 `keystore.alias` 指定）并支持 `local.properties` 的 `keystore.file/keystore.alias/keystore.type/keystore.pass` 覆盖（`local.properties` 与 `*.keystore` 均已被 `.gitignore` 忽略，口令不进版本库）；本地自定义证书不再强制匹配官方指纹，CI Tag 发布仍强制官方密钥。
+- **签名**：本地开发改为读取根目录 `local.keystore`（JKS，别名可用 `keystore.alias` 指定）；证书主体统一为 `CN=piaoyezju / O=ExtBridge`（自签名，有效期至 2056），旧的个人证书已弃用——**更换签名后无法覆盖安装，需卸载重装**并支持 `local.properties` 的 `keystore.file/keystore.alias/keystore.type/keystore.pass` 覆盖（`local.properties` 与 `*.keystore` 均已被 `.gitignore` 忽略，口令不进版本库）；本地自定义证书不再强制匹配官方指纹，CI Tag 发布仍强制官方密钥。
 
 ### 🧩 折叠屏（Galaxy Z Flip5）适配
 - **外屏是独立逻辑显示**：三星折叠机的覆盖屏/副屏是 `displayId=1`（748×720、`FLAG_PRESENTATION`、`INSTALL_ORIENTATION_90`），不是 display 0 的另一种模式。新增 `pickActiveBuiltinDisplayId()`：内屏亮用 0，折叠时自动切到亮着的那块内置屏。
@@ -26,7 +26,7 @@
 ### ✅ 验证
 - 真机（Galaxy Z Flip5 / Android 16 + Shizuku 13.1.5 shell 模式）实测：`授权 Shizuku` → `Shizuku 一键激活服务` → 守护进程 `app_process` 成功以 `u:r:shell:s0` 拉起，主控台顶部显示 **「核心服务在线 · 待插入显示器」**。
 - 修复真机暴露的三个问题：
-  1. **守护进程信任锚**：`bridge/ExtBridge.java` 的 `EXPECTED_HELPER_CERT_SHA256` 单值校验在本地签名包上导致 Binder 握手全被拒（日志 `EXTBRIDGE_SECURITY_REJECT untrusted ... cert=cf854b8d...`）；改为 `TRUSTED_HELPER_CERT_SHA256[]` 白名单，同时保留官方发布证书与本地自签名证书。
+  1. **守护进程信任锚**：`bridge/ExtBridge.java` 的 `EXPECTED_HELPER_CERT_SHA256` 单值校验在本地签名包上导致 Binder 握手全被拒（日志 `EXTBRIDGE_SECURITY_REJECT untrusted ... cert=…`）；改为 `TRUSTED_HELPER_CERT_SHA256[]` 白名单，同时保留官方发布证书与本地自签名证书。
   2. **bootstrap 脚本自杀**：原 `pkill -f '^(/.*/)?app_process.*ExtBridge'` 的正则 `(/.*)?` 会把自己所在的 `sh -c "..."` 命令行（内含 `app_process ... ExtBridge` 文本）一起匹配，导致脚本在拉起前被 SIGTERM（日志 `execShell: code=143 outLen=0`，并残留大量 `extbridge.XXXXXX` 临时 jar）；改为锚定 `^(/system/bin/)?app_process .*com\.extbridge\.daemon\.ExtBridge`，并在脚本开头清扫历史临时 jar。
   3. **诊断能力**：Shizuku 路径的 bootstrap 脚本开启 `set -x` 并重定向到 `/data/local/tmp/extbridge_boot.trace`，失败时自动附带 `id / getenforce / extbridge.log` 探测结果到弹窗与 logcat。
 - 构建脚本：`build_v3.ps1` 改为优先选用 JDK 21+（Android Studio JBR）、`local.properties` 以无 BOM 方式写入、保留 `keystore.*` 覆盖项，并在本地自定义密钥场景下跳过官方指纹校验。

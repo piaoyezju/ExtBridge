@@ -4,7 +4,7 @@
 
 ---
 
-## Unreleased — 激活方式改为 Shizuku（替代无线调试配对）
+## v3.5.5 (`versionCode: 27`) — Shizuku 一键激活 + 折叠屏（外屏）适配
 
 ### ✨ Shizuku 一键激活
 - 新增 Shizuku 依赖与清单声明：`dev.rikka.shizuku:api / aidl / provider:13.1.5`，并在 `AndroidManifest.xml` 中声明受 `INTERACT_ACROSS_USERS_FULL` 保护的 `rikka.shizuku.ShizukuProvider`，`<queries>` 增加 Shizuku 包可见性。
@@ -31,6 +31,24 @@
   3. **诊断能力**：Shizuku 路径的 bootstrap 脚本开启 `set -x` 并重定向到 `/data/local/tmp/extbridge_boot.trace`，失败时自动附带 `id / getenforce / extbridge.log` 探测结果到弹窗与 logcat。
 - 构建脚本：`build_v3.ps1` 改为优先选用 JDK 21+（Android Studio JBR）、`local.properties` 以无 BOM 方式写入、保留 `keystore.*` 覆盖项，并在本地自定义密钥场景下跳过官方指纹校验。
 - `:helper:assembleDebug` 与 `:helper:assembleRelease`（R8 + Lint Vital）均编译通过；release 混淆后 `moe.shizuku.server.IShizukuService` 等 AIDL 描述符与 `rikka.shizuku.ShizukuProvider` 均保留；产物已用 `hzgndz.keystore` V3 签名（`CN=sunfeng / O=hzgndz`，SHA-256 `cf854b8d...5bc3`）。
+
+---
+
+## v3.5.4 (`versionCode: 26`) — 2026-11-20
+
+### 🐛 无线调试 `ERR_STAGE_JAR`（小米手机 MIUI / HyperOS）与 Root 一键激活握手机制全面修复
+- **根治小米手机（Android 11~15 · MIUI 13/14 / HyperOS 1.0 & 2.0）无线调试激活报 `远程 Shell 启动失败: ERR_STAGE_JAR` 的问题 (`AdbBootstrap.java` / `build_v3.ps1` / `start_extbridge.sh`)**
+  - **根因 1（Toybox `unzip -tq` 选项不兼容 + `d8` 流式 ZIP 数据描述符 `0x0808`）**：Android 11~14 及早期 Android 15 机型的系统内置 Toybox `unzip` 仅支持 `-d/-l/-n/-o/-p/-q/-v`，**不存在 `-t` 校验参数**（执行 `unzip -tq` 直接报错 `Unknown option 't'` 并返回退出码 `1`，而在 Android 16 平板上因新版 Toybox 增加了 `-t` 未复现）；同时 `d8` 默认产出的 `extbridge.jar` 带有流式 `Data Descriptor (flag_bits=0x0808)`，部分旧版 `unzip` 顺序解析本地文件头时同样会报异常。现全链路移除 `unzip -tq`，改用 **`PK` 文件魔数 + 256 位 `SHA-256` 精确哈希比对（及 ART 虚拟机 `--verify-helper` 加载校验）**；构建期自动重写 `extbridge.jar` 标准 ZIP 头（`flag_bits=0x0000`）并在 `build.gradle.kts` 中对 `.jar` 资产启用 `noCompress` 免二次压缩。
+  - **根因 2（小米手机未开启「USB 调试（安全设置）」/ 手机分身 / Split APK 导致 `pm path` 或 `/data/app` 读取受限）**：无线调试激活重构为 **三级自适应投递管线**——优先在应用进程内直接从 `AssetManager` 读取 `assets/extbridge.jar` 并通过内置 `libadb.so` 执行原生 **`adb push`（Tier 1）**，失败自动回退 **标准输入流 `cat >` 直写（Tier 2）** 与 **带 `--user <uid>` 的多路径 `pm path` 遍历提取（Tier 3）**，全程无需调用远程 `pm path` 或 `unzip` 即可完成释放；同步将电脑端 `adb shell` 一键命令中的 `appops` 授权改为容错包裹，避免未插卡/未开「USB 调试（安全设置）」的小米手机在启动守护进程前中断。
+  - **进程匹配正则安全收敛**：将 `pgrep`/`pkill` 匹配规则收敛为精确锚定进程首参的 `^app_process.*ExtBridge` 与 `^/system/bin/app_process.*ExtBridge`，消除贪婪匹配误命中外层 `/system/bin/sh -c` 启动脚本的风险，并细分 `ERR_STAGE_EMPTY` / `ERR_STAGE_NOT_ZIP` / `ERR_JAR_SHA256` 诊断码。
+- **合并修复 Root 一键激活「守护进程命令已下发，但暂未收到 Binder 握手」(`ExtBridge.java` / `AdbBootstrap.java` / `ControlReceiver.java`)**
+  - 新增独立高优单线程 `sBinderPushExec`，守护进程启动后 `<250ms` 立即推送 `IBridgeControl` 并在 `+400ms / +1100ms / +2400ms` 自动补推重试，将耗时的 `appops` / `platform_compat` / `miui.home` 自愈全部后置异步化。
+  - 修复 Magisk / KernelSU / APatch 下 `$ROOT_TMP` 跨 `su 2000` 环境变量清空、独立挂载命名空间不可见私有目录（自动回退 `pm path` 并强校验 `SHA-256`）及 `u:r:su:s0` / `u:r:ksu:s0` SELinux 域隔离问题（先降权 `uid=2000` 再经 `setsid runcon u:r:shell:s0` 脱离会话切入标准 `shell` 域）。
+  - 实现 `BridgeProvider` + `com.extbridge.helper.BINDER_PUSH`（`android.permission.INJECT_EVENTS` 签名级权限 + UID 校验）双通道投递，兼容拦截后台 ContentProvider 调用的定制系统。
+- **CI 自动构建与正式签名流水线升级 (`.github/workflows/build.yml` / `build_v3.ps1`)**
+  - 全量升级 GitHub Actions 至 Node 24 版本，CI 模式启用 `--no-daemon` 消除 Windows Gradle 缓存锁警告，并打通 PKCS#12 官方证书自动签名发布。
+
+---
 
 ---
 

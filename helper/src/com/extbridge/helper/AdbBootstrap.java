@@ -61,7 +61,7 @@ public final class AdbBootstrap {
                 + "unzip -p /data/local/tmp/extb_src.apk assets/extbridge.jar > /data/local/tmp/extbridge.jar.new && "
                 + "rm -f /data/local/tmp/extb_src.apk && "
                 + "test -s /data/local/tmp/extbridge.jar.new && "
-                + "unzip -tq /data/local/tmp/extbridge.jar.new >/dev/null 2>&1 && "
+                + "[ \"$(head -c 2 /data/local/tmp/extbridge.jar.new)\" = \"PK\" ] && "
                 + "chmod 644 /data/local/tmp/extbridge.jar.new && "
                 + "timeout 6 env CLASSPATH=/data/local/tmp/extbridge.jar.new app_process /data/local/tmp com.extbridge.daemon.ExtBridge --verify-helper >/dev/null 2>&1 && "
                 + "(timeout 8 env CLASSPATH=/data/local/tmp/extbridge.jar.new app_process /data/local/tmp com.extbridge.daemon.ExtBridge --stop >/dev/null 2>&1 || true) && "
@@ -264,7 +264,7 @@ public final class AdbBootstrap {
                     + "unzip -p \"$APK\" assets/extbridge.jar > '" + rootTmp + "' 2>/dev/null; fi; "
                     + "SRC_SHA=$(sha256sum '" + rootTmp + "' 2>/dev/null | cut -d' ' -f1); "
                     + "fi; "
-                    + "if [ \"$SRC_SHA\" != '" + expSha + "' ] || ! unzip -tq '" + rootTmp + "' >/dev/null 2>&1; then "
+                    + "if [ \"$SRC_SHA\" != '" + expSha + "' ] || [ \"$(head -c 2 '" + rootTmp + "' 2>/dev/null)\" != \"PK\" ]; then "
                     + "rm -f '" + rootTmp + "' 2>/dev/null; echo ERR_STAGE_HASH:$SRC_SHA; exit 21; fi; "
                     + "chmod 644 '" + rootTmp + "' && chown -h 2000:2000 '" + rootTmp + "' "
                     + "|| { rm -f '" + rootTmp + "' 2>/dev/null; echo ERR_STAGE_CHOWN; exit 21; }; "
@@ -335,7 +335,8 @@ public final class AdbBootstrap {
                         + "echo ERR_FINAL_SHA256; exit 22; fi; ")
                 : "";
         return "if [ ! -f " + tmpJarExpr + " ] || [ -L " + tmpJarExpr + " ] || [ ! -s " + tmpJarExpr + " ] "
-                + "|| ! unzip -tq " + tmpJarExpr + " >/dev/null 2>&1; then "
+                // Toybox unzip on Android 11~15 has no `-t`; ZIP magic + SHA-256 is enough
+                + "|| [ \"$(head -c 2 " + tmpJarExpr + " 2>/dev/null)\" != \"PK\" ]; then "
                 + "rm -f " + tmpJarExpr + "; echo ERR_STAGE_JAR; exit 21; fi; "
                 + shaGuard
                 + "chmod 644 " + tmpJarExpr + " || { rm -f " + tmpJarExpr + "; echo ERR_CHMOD_JAR; exit 21; }; "

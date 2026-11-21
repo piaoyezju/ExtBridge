@@ -127,7 +127,7 @@ jobs:
             $kts = Get-Content -Raw -Path ".\helper\build.gradle.kts" -Encoding UTF8
             if ($kts -match 'versionName\s*=\s*"([^"]+)"') { $ver = $Matches[1] }
           }
-          if (-not $ver) { $ver = "3.5.3" }
+          if (-not $ver) { $ver = "3.5.5" }
           if (Test-Path ".\build\out\exthelper.apk") {
             $apkName = "ExtBridge_v$ver.apk"
             Copy-Item -Path ".\build\out\exthelper.apk" -Destination ".\build\out\$apkName" -Force

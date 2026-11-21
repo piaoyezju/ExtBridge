@@ -1,4 +1,4 @@
-# ExtBridge (`v3.5.3`) — Android 免 Root Type-C 类 DeX 扩展桌面与增强镜像副屏系统
+# ExtBridge (`v3.5.5`) — Android 免 Root Type-C 类 DeX 扩展桌面与增强镜像副屏系统
 
 > **无需 Root · 单个 APK 自激活 · Xiaomi HyperOS 原生澎湃视觉 (`Compose + Miuix`) · 支持「DeX 独立扩展桌面」与「增强原生镜像信息副屏」双工作模式 · [📖 完整图文使用说明书](docs/USER_GUIDE.md) · [📝 v3.5.3 更新文档](docs/RELEASE_v3.5.3.md)**
 
@@ -6,9 +6,9 @@
 
 ---
 
-## ✨ 核心特性 & 新增功能全览 (`v3.5.3`)
+## ✨ 核心特性 & 新增功能全览 (`v3.5.5`)
 
-### 0. 🎨 全新 Xiaomi HyperOS 原生澎湃界面重构、舞台动效与全周边联动 (`v3.5.3`)
+### 0. 🎨 全新 Xiaomi HyperOS 原生澎湃界面重构、舞台动效与全周边联动 (`v3.5.5`)
 - **主控台与大触摸板 (`Jetpack Compose + Miuix 0.9.4`)**：彻底告别单页臃肿堆砌与彩虹按钮，支持 **平板横屏左侧 `NavigationRail` 双栏工作台** 与 **手机竖屏可折叠大标题 `TopAppBar` + 底部四栏 `NavigationBar`** 自适应切换，内置**跟随系统 / 澎湃浅色 / 澎湃深色**三态外观；提供 `2×2` 控制中心快捷磁贴、可视化镜像布局示意图、关键点吸附 DPI 滑块与独立一级「分应用显示规则」搜索页。
 - **HyperOS 2.0 级窗口最小化/恢复与分屏过渡动画 (`StageTransitionView`)**：新增跨进程零拷贝 `HardwareBuffer` `TaskSnapshot` 快照通道，支持点击 Dock 图标退回后台微弧收缩形变、后台应用弹簧展开、分屏比例切换双窗同步形变与左右/上下互换立体交叉动画。
 - **全周边界面线性矢量联动（零 Emoji）**：外接屏 DeX 底部 Dock、HyperOS 风格 `#0D84FF` 快捷控制中心浮窗、自由分屏比例菜单、扩展桌面启动器顶栏、`SideControlActivity` 副屏直控以及镜像边栏全部 14 款预设信息卡片均统一采用抗锯齿线性矢量图标与澎湃圆角卡片视觉。
@@ -74,7 +74,7 @@
 │       └── ExtBridge.java                   # 物理屏接管、VirtualDisplay/SurfaceControl 投射、
 │                                            # Binder IPC (UID ACL 鉴权)、分屏/键鼠跨屏注入、亮度管理
 ├── helper/                                  # Android 客户端 App (com.extbridge.helper · Kotlin + Compose + Miuix)
-│   ├── build.gradle.kts                     # AGP 9 + Compose + Miuix 0.9.4 + R8 瘦身配置 (v3.5.3 / code 25)
+│   ├── build.gradle.kts                     # AGP 9 + Compose + Miuix 0.9.4 + R8 瘦身配置 (v3.5.5 / code 27)
 │   ├── AndroidManifest.xml                  # 清单声明、Shizuku Provider 与 ControlReceiver 契约
 │   ├── res/
 │   └── src/com/extbridge/helper/
@@ -110,12 +110,12 @@
 详细图文步骤与各模式操作说明请阅读 **[📖 docs/USER_GUIDE.md](docs/USER_GUIDE.md)**。
 
 ### 核心 3 步：
-1. 安装 `ExtBridge_v3.5.3.apk`，首次打开按提示授予 **通知**、**悬浮窗** 与 **无障碍服务 (`ExtBridge 平板辅助手势`)** 权限（小米等设备建议在开发者选项开启「USB 调试（安全设置）」以允许点击注入）。
+1. 安装 `ExtBridge_v3.5.5.apk`，首次打开按提示授予 **通知**、**悬浮窗** 与 **无障碍服务 (`ExtBridge 平板辅助手势`)** 权限（小米等设备建议在开发者选项开启「USB 调试（安全设置）」以允许点击注入）。
 2. 在激活弹窗中任选其一启动守护进程：
    - **Shizuku 一键激活（最推荐）**：安装并启动 [Shizuku](https://shizuku.rikka.app/download/)，在弹窗 **「Shizuku 激活」** 页点击 **「授权 Shizuku」** → **「Shizuku 一键激活服务」** 即可，**无需开启无线调试、无需输入 6 位配对码**；
    - **电脑 ADB 一键命令**（零宿主变量展开，兼容 Windows CMD / PowerShell 与 Linux / macOS Bash / Zsh）：
      ```bash
-     adb shell "rm -f /data/local/tmp/extb_src.apk /data/local/tmp/extbridge.jar.new && pm path com.extbridge.helper | cut -d: -f2 | head -n1 | xargs cat > /data/local/tmp/extb_src.apk && test -s /data/local/tmp/extb_src.apk && unzip -p /data/local/tmp/extb_src.apk assets/extbridge.jar > /data/local/tmp/extbridge.jar.new && rm -f /data/local/tmp/extb_src.apk && test -s /data/local/tmp/extbridge.jar.new && unzip -tq /data/local/tmp/extbridge.jar.new >/dev/null 2>&1 && chmod 644 /data/local/tmp/extbridge.jar.new && timeout 6 env CLASSPATH=/data/local/tmp/extbridge.jar.new app_process /data/local/tmp com.extbridge.daemon.ExtBridge --verify-helper >/dev/null 2>&1 && (timeout 8 env CLASSPATH=/data/local/tmp/extbridge.jar.new app_process /data/local/tmp com.extbridge.daemon.ExtBridge --stop >/dev/null 2>&1 || true) && (pgrep -f '^app_process.*ExtBridge' >/dev/null 2>&1 && (pkill -f '^app_process.*ExtBridge' 2>/dev/null || true) && sleep 1 && (pkill -f -l KILL '^app_process.*ExtBridge' 2>/dev/null || true) || true) && rm -f /data/local/tmp/extbridge.jar && mv -f /data/local/tmp/extbridge.jar.new /data/local/tmp/extbridge.jar && test -s /data/local/tmp/extbridge.jar && appops set com.extbridge.helper SYSTEM_ALERT_WINDOW allow && appops set com.extbridge.helper RUN_ANY_IN_BACKGROUND allow && (appops set com.extbridge.helper 10021 allow 2>/dev/null || true) && (appops set com.extbridge.helper ACCESS_RESTRICTED_SETTINGS allow 2>/dev/null || true) && (pm grant com.extbridge.helper android.permission.POST_NOTIFICATIONS 2>/dev/null || true) && (dumpsys deviceidle whitelist +com.extbridge.helper >/dev/null 2>&1 || true) && (CLASSPATH=/data/local/tmp/extbridge.jar nohup app_process /data/local/tmp com.extbridge.daemon.ExtBridge >/data/local/tmp/extbridge.log 2>&1 </dev/null &)"
+     adb shell "rm -f /data/local/tmp/extb_src.apk /data/local/tmp/extbridge.jar.new && pm path com.extbridge.helper | cut -d: -f2 | head -n1 | xargs cat > /data/local/tmp/extb_src.apk && test -s /data/local/tmp/extb_src.apk && unzip -p /data/local/tmp/extb_src.apk assets/extbridge.jar > /data/local/tmp/extbridge.jar.new && rm -f /data/local/tmp/extb_src.apk && test -s /data/local/tmp/extbridge.jar.new && [ "$(head -c 2 /data/local/tmp/extbridge.jar.new)" = "PK" ] && chmod 644 /data/local/tmp/extbridge.jar.new && timeout 6 env CLASSPATH=/data/local/tmp/extbridge.jar.new app_process /data/local/tmp com.extbridge.daemon.ExtBridge --verify-helper >/dev/null 2>&1 && (timeout 8 env CLASSPATH=/data/local/tmp/extbridge.jar.new app_process /data/local/tmp com.extbridge.daemon.ExtBridge --stop >/dev/null 2>&1 || true) && (pgrep -f '^app_process.*ExtBridge' >/dev/null 2>&1 && (pkill -f '^app_process.*ExtBridge' 2>/dev/null || true) && sleep 1 && (pkill -f -l KILL '^app_process.*ExtBridge' 2>/dev/null || true) || true) && rm -f /data/local/tmp/extbridge.jar && mv -f /data/local/tmp/extbridge.jar.new /data/local/tmp/extbridge.jar && test -s /data/local/tmp/extbridge.jar && appops set com.extbridge.helper SYSTEM_ALERT_WINDOW allow && appops set com.extbridge.helper RUN_ANY_IN_BACKGROUND allow && (appops set com.extbridge.helper 10021 allow 2>/dev/null || true) && (appops set com.extbridge.helper ACCESS_RESTRICTED_SETTINGS allow 2>/dev/null || true) && (pm grant com.extbridge.helper android.permission.POST_NOTIFICATIONS 2>/dev/null || true) && (dumpsys deviceidle whitelist +com.extbridge.helper >/dev/null 2>&1 || true) && (CLASSPATH=/data/local/tmp/extbridge.jar nohup app_process /data/local/tmp com.extbridge.daemon.ExtBridge >/data/local/tmp/extbridge.log 2>&1 </dev/null &)"
      ```
    - **已 Root 设备**：一键授权后先切至 `shell (uid=2000)` 校验哈希与证书，守护进程强制降权运行（失败即中止退出）。
 3. 插上 Type-C 显示器即可在控制台或快捷栏随时切换 **DeX 独立桌面 / 自由分屏 / 增强原生镜像 / 一键黑屏省电**。

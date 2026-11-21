@@ -20,7 +20,21 @@ if [ "$(id -u 2>/dev/null)" = "0" ]; then
     exit 20
 fi
 
-APK_PATH=$(pm path com.extbridge.helper 2>/dev/null | head -n1 | cut -d: -f2)
+is_daemon_alive() {
+    pgrep -f '^app_process.*ExtBridge' >/dev/null 2>&1 || pgrep -f '^/system/bin/app_process.*ExtBridge' >/dev/null 2>&1
+}
+
+kill_old_daemon() {
+    if is_daemon_alive; then
+        (pkill -f '^app_process.*ExtBridge' 2>/dev/null || true)
+        (pkill -f '^/system/bin/app_process.*ExtBridge' 2>/dev/null || true)
+        sleep 1.0
+        (pkill -f -l KILL '^app_process.*ExtBridge' 2>/dev/null || true)
+        (pkill -f -l KILL '^/system/bin/app_process.*ExtBridge' 2>/dev/null || true)
+    fi
+}
+
+APK_PATH=$(pm path com.extbridge.helper 2>/dev/null | sed -n 's/^package://p' | tr -d '\r' | head -n1)
 
 if [ -n "$APK_PATH" ]; then
     TMP_JAR=$(mktemp /data/local/tmp/extbridge.XXXXXX 2>/dev/null)
@@ -33,7 +47,7 @@ if [ -n "$APK_PATH" ]; then
     if ! unzip -p "$APK_PATH" assets/extbridge.jar > "$TMP_JAR" 2>/dev/null \
         || [ ! -s "$TMP_JAR" ] \
         || [ -L "$TMP_JAR" ] \
-        || ! unzip -tq "$TMP_JAR" >/dev/null 2>&1; then
+        || [ "$(dd if="$TMP_JAR" bs=1 count=2 2>/dev/null)" != "PK" ]; then
         rm -f "$TMP_JAR" 2>/dev/null
         echo "ERR_STAGE_JAR: failed to extract valid assets/extbridge.jar from $APK_PATH" >&2
         exit 21
@@ -57,11 +71,7 @@ if [ -n "$APK_PATH" ]; then
     fi
 
     (timeout 8 env CLASSPATH="$TMP_JAR" /system/bin/app_process /data/local/tmp com.extbridge.daemon.ExtBridge --stop >/dev/null 2>&1 || true)
-    if pgrep -f '^(/.*/)?app_process.*ExtBridge' >/dev/null 2>&1; then
-        (pkill -f '^(/.*/)?app_process.*ExtBridge' 2>/dev/null || true)
-        sleep 1.0
-        (pkill -f -l KILL '^(/.*/)?app_process.*ExtBridge' 2>/dev/null || true)
-    fi
+    kill_old_daemon
 
     rm -f /data/local/tmp/extbridge.jar 2>/dev/null
     if ! mv -f "$TMP_JAR" /data/local/tmp/extbridge.jar \
@@ -80,16 +90,12 @@ if [ -n "$APK_PATH" ]; then
     pm grant com.extbridge.helper android.permission.POST_NOTIFICATIONS 2>/dev/null
     dumpsys deviceidle whitelist +com.extbridge.helper >/dev/null 2>&1
 else
-    if [ -L /data/local/tmp/extbridge.jar ] || [ ! -s /data/local/tmp/extbridge.jar ] || ! unzip -tq /data/local/tmp/extbridge.jar >/dev/null 2>&1; then
+    if [ -L /data/local/tmp/extbridge.jar ] || [ ! -s /data/local/tmp/extbridge.jar ] || [ "$(dd if=/data/local/tmp/extbridge.jar bs=1 count=2 2>/dev/null)" != "PK" ]; then
         echo "ERR_NO_JAR: com.extbridge.helper not installed and /data/local/tmp/extbridge.jar missing or invalid" >&2
         exit 23
     fi
     (CLASSPATH=/data/local/tmp/extbridge.jar /system/bin/app_process /data/local/tmp com.extbridge.daemon.ExtBridge --stop >/dev/null 2>&1 || true)
-    if pgrep -f '^(/.*/)?app_process.*ExtBridge' >/dev/null 2>&1; then
-        (pkill -f '^(/.*/)?app_process.*ExtBridge' 2>/dev/null || true)
-        sleep 1.0
-        (pkill -f -l KILL '^(/.*/)?app_process.*ExtBridge' 2>/dev/null || true)
-    fi
+    kill_old_daemon
 fi
 
 LOG_DST=/dev/null
@@ -110,13 +116,13 @@ case "$CUR_CTX" in
     *)
         (setsid runcon u:r:shell:s0 /system/bin/app_process /data/local/tmp com.extbridge.daemon.ExtBridge </dev/null >>"$LOG_DST" 2>&1 &)
         sleep 0.5
-        if ! pgrep -f '^(/.*/)?app_process.*ExtBridge' >/dev/null 2>&1; then
+        if ! is_daemon_alive; then
             (setsid /system/bin/app_process /data/local/tmp com.extbridge.daemon.ExtBridge </dev/null >>"$LOG_DST" 2>&1 &)
             sleep 0.5
         fi
         ;;
 esac
-if ! pgrep -f '^(/.*/)?app_process.*ExtBridge' >/dev/null 2>&1; then
+if ! is_daemon_alive; then
     nohup app_process /data/local/tmp com.extbridge.daemon.ExtBridge >>"$LOG_DST" 2>&1 </dev/null &
 fi
 sleep 1.0

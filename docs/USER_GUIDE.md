@@ -1,4 +1,4 @@
-# ExtBridge `v3.5.3` 完整图文操作说明书
+# ExtBridge `v3.5.4` 完整图文操作说明书
 
 > **无需 Root · 单 APK 三模自激活 · Xiaomi HyperOS 澎湃原生视觉 (`Compose + Miuix`) · 「DeX 独立扩展桌面」与「增强原生镜像副屏」双工作模式**
 
@@ -79,7 +79,7 @@ ExtBridge 通过 [Shizuku](https://shizuku.rikka.app/download/) 直接以系统 
 将平板/手机连上电脑 ADB 后，在激活抽屉切到 **「电脑 ADB」** 点击复制命令（或直接复制下方命令），在 **Windows CMD / PowerShell** 或 **macOS / Linux Bash / Zsh** 终端直接粘贴回车即可（若电脑连了多台设备，请在 `adb` 后加上 `-s <设备序列号>`）：
 
 ```bash
-adb shell "rm -f /data/local/tmp/extb_src.apk /data/local/tmp/extbridge.jar.new && pm path com.extbridge.helper | cut -d: -f2 | head -n1 | xargs cat > /data/local/tmp/extb_src.apk && test -s /data/local/tmp/extb_src.apk && unzip -p /data/local/tmp/extb_src.apk assets/extbridge.jar > /data/local/tmp/extbridge.jar.new && rm -f /data/local/tmp/extb_src.apk && test -s /data/local/tmp/extbridge.jar.new && unzip -tq /data/local/tmp/extbridge.jar.new >/dev/null 2>&1 && chmod 644 /data/local/tmp/extbridge.jar.new && timeout 6 env CLASSPATH=/data/local/tmp/extbridge.jar.new app_process /data/local/tmp com.extbridge.daemon.ExtBridge --verify-helper >/dev/null 2>&1 && (timeout 8 env CLASSPATH=/data/local/tmp/extbridge.jar.new app_process /data/local/tmp com.extbridge.daemon.ExtBridge --stop >/dev/null 2>&1 || true) && (pgrep -f '^app_process.*ExtBridge' >/dev/null 2>&1 && (pkill -f '^app_process.*ExtBridge' 2>/dev/null || true) && sleep 1 && (pkill -f -l KILL '^app_process.*ExtBridge' 2>/dev/null || true) || true) && rm -f /data/local/tmp/extbridge.jar && mv -f /data/local/tmp/extbridge.jar.new /data/local/tmp/extbridge.jar && test -s /data/local/tmp/extbridge.jar && appops set com.extbridge.helper SYSTEM_ALERT_WINDOW allow && appops set com.extbridge.helper RUN_ANY_IN_BACKGROUND allow && (appops set com.extbridge.helper 10021 allow 2>/dev/null || true) && (appops set com.extbridge.helper ACCESS_RESTRICTED_SETTINGS allow 2>/dev/null || true) && (pm grant com.extbridge.helper android.permission.POST_NOTIFICATIONS 2>/dev/null || true) && (dumpsys deviceidle whitelist +com.extbridge.helper >/dev/null 2>&1 || true) && (CLASSPATH=/data/local/tmp/extbridge.jar nohup app_process /data/local/tmp com.extbridge.daemon.ExtBridge >/data/local/tmp/extbridge.log 2>&1 </dev/null &)"
+adb shell "rm -f /data/local/tmp/extb_src.apk /data/local/tmp/extbridge.jar.new && pm path com.extbridge.helper | grep '^package:' | cut -d: -f2 | head -n1 | xargs cat > /data/local/tmp/extb_src.apk && test -s /data/local/tmp/extb_src.apk && unzip -p /data/local/tmp/extb_src.apk assets/extbridge.jar > /data/local/tmp/extbridge.jar.new && rm -f /data/local/tmp/extb_src.apk && test -s /data/local/tmp/extbridge.jar.new && chmod 644 /data/local/tmp/extbridge.jar.new && timeout 6 env CLASSPATH=/data/local/tmp/extbridge.jar.new app_process /data/local/tmp com.extbridge.daemon.ExtBridge --verify-helper >/dev/null 2>&1 && (timeout 8 env CLASSPATH=/data/local/tmp/extbridge.jar.new app_process /data/local/tmp com.extbridge.daemon.ExtBridge --stop >/dev/null 2>&1 || true) && ((pgrep -f '^app_process.*ExtBridge' >/dev/null 2>&1 || pgrep -f '^/system/bin/app_process.*ExtBridge' >/dev/null 2>&1) && (pkill -f '^app_process.*ExtBridge' 2>/dev/null; pkill -f '^/system/bin/app_process.*ExtBridge' 2>/dev/null; true) && sleep 1 && (pkill -f -l KILL '^app_process.*ExtBridge' 2>/dev/null; pkill -f -l KILL '^/system/bin/app_process.*ExtBridge' 2>/dev/null; true) || true) && rm -f /data/local/tmp/extbridge.jar && mv -f /data/local/tmp/extbridge.jar.new /data/local/tmp/extbridge.jar && test -s /data/local/tmp/extbridge.jar && (appops set com.extbridge.helper SYSTEM_ALERT_WINDOW allow 2>/dev/null || true) && (appops set com.extbridge.helper RUN_ANY_IN_BACKGROUND allow 2>/dev/null || true) && (appops set com.extbridge.helper 10021 allow 2>/dev/null || true) && (appops set com.extbridge.helper ACCESS_RESTRICTED_SETTINGS allow 2>/dev/null || true) && (pm grant com.extbridge.helper android.permission.POST_NOTIFICATIONS 2>/dev/null || true) && (dumpsys deviceidle whitelist +com.extbridge.helper >/dev/null 2>&1 || true) && (CLASSPATH=/data/local/tmp/extbridge.jar nohup app_process /data/local/tmp com.extbridge.daemon.ExtBridge >/data/local/tmp/extbridge.log 2>&1 </dev/null &)"
 ```
 
 ---
@@ -100,9 +100,11 @@ ExtBridge `v3.5.3` 主控台会根据屏幕宽度自动适配布局：**横屏�
 
 ![主控台首页（平板双栏工作台 · DeX 在线）](images/console-main.png)
 
+![主控台首页（澎湃浅色模式）](images/console-home-light.png)
+
 ![连接与渲染管线诊断抽屉](images/console-diag.png)
 
-![显示与边栏 · DeX 扩展画布与 DPI 配置页](images/console-main.png)
+![显示与边栏 · DeX 扩展画布与 DPI 配置页](images/console-dex-config.png)
 
 ![显示与边栏 · 原生镜像 2×2 可视化布局与小组件槽位](images/console-mirror.png)
 

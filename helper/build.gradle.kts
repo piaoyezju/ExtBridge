@@ -25,8 +25,8 @@ android {
         applicationId = "com.extbridge.helper"
         minSdk = 30
         targetSdk = 35
-        versionCode = 25
-        versionName = "3.5.3"
+        versionCode = 27
+        versionName = "3.5.5"
     }
 
     sourceSets {
@@ -45,6 +45,12 @@ android {
 
     buildFeatures {
         compose = true
+    }
+
+    // assets/extbridge.jar must stay STORED (no re-compression) so on-device `unzip -p`
+    // / SHA-256 verification works on every Toybox build (kept from upstream v3.5.4 fix).
+    androidResources {
+        noCompress += "jar"
     }
 
     val expectedReleaseCertSha256 = "e4f67b3012a16633006c64bfc9d5a95c7bdda10826bd729777c2a3066f49117c"

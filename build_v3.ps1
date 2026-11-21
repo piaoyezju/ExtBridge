@@ -86,6 +86,12 @@ $bridgeClasses = Get-ChildItem -Recurse -Filter "*.class" "$BUILD\bridge_classes
 & "$BT\d8.bat" --min-api 30 --output "$BUILD\out\extbridge.jar" @bridgeClasses
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+# Normalize extbridge.jar ZIP headers (clear streaming Data Descriptor bit 0x0008 and pin deterministic timestamp)
+if (Get-Command python -ErrorAction SilentlyContinue) {
+    python -c "import sys, zipfile; p=sys.argv[1]; z=zipfile.ZipFile(p,'r'); items=[(i.filename,z.read(i.filename)) for i in z.infolist()]; z.close(); out=zipfile.ZipFile(p,'w'); [out.writestr(zipfile.ZipInfo(k,(2026,1,1,0,0,0)),v,compress_type=zipfile.ZIP_DEFLATED) for k,v in items]; out.close()" "$BUILD\out\extbridge.jar"
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
 $genAssetsDir = Join-Path $ROOT "helper\assets"
 New-Item -ItemType Directory -Force $genAssetsDir | Out-Null
 Copy-Item -Path "$BUILD\out\extbridge.jar" -Destination "$genAssetsDir\extbridge.jar" -Force
